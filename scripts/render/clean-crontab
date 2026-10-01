@@ -1,0 +1,3 @@
+# Clean: disabled by default — set CLEAN_CRON_ENABLE=1 and edit schedule in Render shell.
+# Example: Sunday 08:00 UTC after weekly scrape
+# 0 8 * * 0 /opt/render/project/src/scripts/render/run-clean.sh

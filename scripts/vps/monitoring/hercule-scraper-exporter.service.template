@@ -1,0 +1,17 @@
+[Unit]
+Description=Hercule scraper fleet Prometheus exporter
+After=network.target
+
+[Service]
+Type=simple
+WorkingDirectory=__REPO_ROOT__/scraper
+Environment=HERCULE_DATA_ROOT=__DATA_ROOT__
+Environment=SCRAPER_EXPORTER_PORT=9464
+Environment=PYTHONPATH=__REPO_ROOT__:__REPO_ROOT__/scraper
+ExecStart=__VENV_PYTHON__ -m monitoring.exporter --port 9464 --data-root __DATA_ROOT__
+Restart=always
+RestartSec=5
+StartLimitIntervalSec=0
+
+[Install]
+WantedBy=multi-user.target

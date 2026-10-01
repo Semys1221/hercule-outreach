@@ -1,0 +1,2 @@
+# Scraper: Monday 05:00 UTC (override SCRAPER_CRON in Render env to change)
+0 5 * * 1 /opt/render/project/src/scripts/render/run-scraper.sh

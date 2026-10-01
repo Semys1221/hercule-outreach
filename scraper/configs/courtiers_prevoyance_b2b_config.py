@@ -1,0 +1,172 @@
+"""Courtiers prévoyance B2B — Outscraper taxonomy gate (anti-retail / réseaux)."""
+
+from french_cities import FRENCH_EXPANSION_LOCATIONS, FRENCH_LOCATIONS
+
+PRESET_ID = "courtiers_prevoyance_b2b"
+PRESET_LABEL = "Courtiers prévoyance B2B (France)"
+
+_LIST_ID = "016dffeb-b915-4f68-a496-c37b3108b4f3"
+_CAMPAIGN_ID = "fcfbc849-508d-493a-b8a1-fb14db2f4909"
+_SUBSEQUENCE_ID = "3c98dd71-ffb5-42cd-b479-e8d6dc0cb281"
+
+_CIF_LIST_ID = "4a616678-06a0-44d2-a27c-f9248a4c34bf"
+_COMPTABLE_VOL_LIST_ID = "ca3e72d4-5a43-4399-a89b-566095e69c25"
+
+COURTIERS_PREVOYANCE_B2B_CONFIG = {
+    "OUTSCRAPER_API_KEY": "",
+    "INSTANTLY_API_KEY": "",
+    "INSTANTLY_LIST_ID": _LIST_ID,
+    "INSTANTLY_CAMPAIGN_ID": _CAMPAIGN_ID,
+    "INSTANTLY_SUBSEQUENCE_ID": _SUBSEQUENCE_ID,
+    "INSTANTLY_DEDUP_LIST_IDS": [
+        _LIST_ID,
+        _CIF_LIST_ID,
+        _COMPTABLE_VOL_LIST_ID,
+    ],
+    "INSTANTLY_DEDUP_CAMPAIGN_IDS": [],
+    "INSTANTLY_SKIP_IF_IN_CAMPAIGN": True,
+    "INSTANTLY_SKIP_IF_IN_LIST": True,
+    "INSTANTLY_PUSH_EVERY": 25,
+    "INSTANTLY_BACKLOG_PUSH_MIN": 25,
+    "INSTANTLY_PROVISION_LINKS": True,
+    "LINK_PROVISION_CATEGORY": "cif",
+    "ENRICH_ENABLED": False,
+    "WEBSITE_REQUIRED": False,
+    "OUTSCRAPER_FILTERS": ["operational_only"],
+    "TAXONOMY_GATE_ENABLED": True,
+    "TAXONOMY_MATCH_MODE": "taxonomy_only",
+    "TAXONOMY_INCLUDED_KEYWORDS": [
+        "intermédiaire en assurance",
+        "courtier en assurance",
+        "courtier d'assurances",
+        "insurance broker",
+        "insurance agency",
+    ],
+    "TAXONOMY_EXCLUDED_KEYWORDS": [
+        # Réseaux banque-assurance
+        "crédit agricole",
+        "bnp paribas",
+        "société générale",
+        "banque populaire",
+        "caisse d'épargne",
+        "axa",
+        "allianz",
+        "generali",
+        "groupama",
+        "maif",
+        "macif",
+        "matmut",
+        "mma",
+        "swiss life",
+        "cnp",
+        "lcl",
+        "fortuneo",
+        # Retail pur
+        "agence d'assurance",
+        "compagnie d'assurance",
+        "agent général",
+        "assurance auto",
+        "assurance habitation",
+        # Bruit adjacent
+        "banque",
+        "bank",
+        "immobilier",
+        "expert-comptable",
+        "avocat",
+        "notaire",
+        "restaurant",
+        "école",
+        "ecole",
+        "garage",
+    ],
+    "ENRICH_INCLUDED_KEYWORDS": [],
+    "ENRICH_HARD_EXCLUDED_KEYWORDS": [],
+    "ENRICH_SOFT_EXCLUDED_KEYWORDS": [],
+    "OUTSCRAPER_BATCH_SIZE": 40,
+    "OUTSCRAPER_CONCURRENCY": 16,
+    "OUTSCRAPER_LIMIT_PER_QUERY": 200,
+    "OUTSCRAPER_POLL_INITIAL_S": 10,
+    "OUTSCRAPER_POLL_INTERVAL_S": 5,
+    "OUTSCRAPER_POLL_SLOW_S": 10,
+    "OUTSCRAPER_POLL_TIMEOUT_S": 600,
+    "OUTSCRAPER_TOTAL_LIMIT_BUFFER": 12,
+    "OUTSCRAPER_ENRICHMENT": ["leads_n_contacts"],
+    "OUTSCRAPER_EMAIL_RECOVERY_ENABLED": True,
+    "TARGET_LEADS": 10000,
+    "TARGET_MODE": "instantly_pushed",
+    "SCRAPE_START_QUERY_PASS": 0,
+    "SCRAPE_SKIP_PHASE_ENABLED": False,
+    "SCRAPE_SKIP_SATURATION_TO_DEPARTMENT": True,
+    "DUPLICATE_GEO_ADVANCE_RATE": 0.50,
+    "SCRAPE_RELOAD_ENABLED": True,
+    "SCRAPE_RELOAD_MAX_ROUNDS": 8,
+    "SCRAPE_RELOAD_START_GEO_PHASE": "pass",
+    "SCRAPE_RELOAD_START_QUERY_PASS": 0,
+    "SCRAPE_CONTINUOUS_MODE": True,
+    "SCRAPE_CONTINUOUS_MAX_ZERO_CYCLES": 3,
+    "CONTINUOUS_KEYWORD_ROTATIONS": [
+        [
+            "courtier en prévoyance",
+            "courtier prévoyance santé",
+            "courtier protection sociale",
+            "cabinet de courtage en assurance",
+        ],
+        [
+            "courtier en assurance",
+            "courtier assurance collective",
+            "intermédiaire en assurance",
+            "cabinet courtage assurance",
+        ],
+        [
+            "courtier mutuelle entreprise",
+            "protection sociale entreprise",
+            "courtier prévoyance entreprise",
+            "courtier santé collective",
+        ],
+        [
+            "courtier d'assurances",
+            "cabinet courtage prévoyance",
+            "intermédiaire assurance collective",
+            "courtier protection sociale entreprise",
+        ],
+    ],
+    "SERVICE_DEFAULT": "Courtage prévoyance B2B",
+    "SERVICE_RULES": [],
+    "KEYWORDS": [
+        "Courtier en prévoyance",
+        "Courtier prévoyance santé",
+        "Courtier protection sociale",
+        "Cabinet de courtage en assurance",
+    ],
+    "EXPANSION_KEYWORDS": [
+        "courtier en assurance",
+        "courtier assurance collective",
+        "intermédiaire en assurance",
+        "cabinet courtage assurance",
+        "courtier mutuelle entreprise",
+        "protection sociale entreprise",
+    ],
+    "LOCATIONS": FRENCH_LOCATIONS,
+    "EXPANSION_LOCATIONS": FRENCH_EXPANSION_LOCATIONS,
+    "EXCLUDE_DOMAINS": [
+        "duckduckgo.com",
+        "google.com",
+        "google.fr",
+        "facebook.com",
+        "instagram.com",
+        "linkedin.com",
+        "youtube.com",
+        "pinterest.com",
+        "tiktok.com",
+        "societe.com",
+        "pagesjaunes.fr",
+    ],
+    "PAPPERS_ENABLED": False,
+    "NICHE_METADATA": {
+        "angle": "Lead gen pour courtiers prévoyance / protection sociale B2B",
+        "valeur_client": "Prise de RDV avec des cabinets de courtage ORIAS indépendants (prévoyance, santé collective, protection sociale)",
+        "effectif_cible": "qualif à la réponse",
+    },
+}
+
+CONFIG = COURTIERS_PREVOYANCE_B2B_CONFIG

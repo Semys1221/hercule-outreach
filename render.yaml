@@ -1,0 +1,85 @@
+# Render Blueprint — hercule-outreach (scraper + clean).
+#
+# Deploy: connect this repo in Render Dashboard → New Blueprint.
+# Secrets: fill sync:false keys in env group "hercule-outreach" after Apply.
+
+envVarGroups:
+  - name: hercule-outreach
+    envVars:
+      - key: OUTSCRAPER_API_KEY
+        sync: false
+      - key: INSTANTLY_API_KEY
+        sync: false
+      - key: MYEMAILVERIFIER_API_KEY
+        sync: false
+      - key: CRM_BACKEND_URL
+        value: https://www.hercule.dev
+
+services:
+  - type: worker
+    name: hercule-scraper-worker
+    runtime: python
+    plan: starter
+    buildCommand: pip install -r requirements.txt
+    startCommand: bash scripts/render/worker-entrypoint.sh
+    envVars:
+      - fromGroup: hercule-outreach
+      - key: HERCULE_DATA_ROOT
+        value: /var/data
+      - key: PYTHONPATH
+        value: /opt/render/project/src:/opt/render/project/src/scraper
+      - key: WORKER_CRONTAB
+        value: scraper-crontab
+      - key: SCRAPER_PRESET
+        sync: false
+      - key: SCRAPER_TARGET
+        value: "5000"
+      - key: SCRAPER_PUSH_INSTANTLY
+        value: "1"
+    disk:
+      name: hercule-scraper-data
+      mountPath: /var/data
+      sizeGB: 10
+
+  - type: worker
+    name: hercule-clean-worker
+    runtime: python
+    plan: starter
+    buildCommand: pip install -r requirements.txt
+    startCommand: bash scripts/render/worker-entrypoint.sh
+    envVars:
+      - fromGroup: hercule-outreach
+      - key: HERCULE_DATA_ROOT
+        value: /var/data
+      - key: PYTHONPATH
+        value: /opt/render/project/src:/opt/render/project/src/clean
+      - key: WORKER_CRONTAB
+        value: clean-crontab
+      - key: CLEAN_MODE
+        value: test_50
+      - key: CLEAN_LIST_ID
+        sync: false
+      - key: CLEAN_CAMPAIGN_ID
+        sync: false
+    disk:
+      name: hercule-clean-data
+      mountPath: /var/data
+      sizeGB: 2
+
+  - type: web
+    name: hercule-outreach-ui
+    runtime: python
+    plan: starter
+    buildCommand: pip install -r requirements.txt
+    startCommand: >-
+      bash -c 'cd ${STREAMLIT_APP_DIR:-scraper} &&
+      streamlit run app.py --server.port=$PORT --server.address=0.0.0.0
+      --server.headless=true'
+    envVars:
+      - fromGroup: hercule-outreach
+      - key: HERCULE_DATA_ROOT
+        value: /var/data
+      - key: PYTHONPATH
+        value: /opt/render/project/src:/opt/render/project/src/scraper:/opt/render/project/src/clean
+      - key: STREAMLIT_APP_DIR
+        value: scraper
