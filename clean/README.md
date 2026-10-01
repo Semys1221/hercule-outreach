@@ -1,28 +1,29 @@
 # Streamlit Clean
 
-## AI agents
-
-Before editing this app, read:
-1. [`.cursor/skills/hercule-streamlit/SKILL.md`](../../../.cursor/skills/hercule-streamlit/SKILL.md) (router)
-2. [`.cursor/skills/hercule-streamlit-clean/SKILL.md`](../../../.cursor/skills/hercule-streamlit-clean/SKILL.md) (this app)
-
-Human reference: sections below.
-
 MyEmailVerifier email list cleaner → Instantly campaign push.
 
 ## Quick start
 
+From repo root (see [`Makefile`](../Makefile)):
+
 ```bash
-bun run streamlit-clean
-# or:
-cd lib/backend/streamlit_clean && pip install -r requirements.txt && streamlit run app.py
+make venv
+make dev-clean
 ```
 
-### Headless CLI (Render / cron)
+Or manually:
 
 ```bash
-export PYTHONPATH=/path/to/repo
-cd lib/backend/streamlit_clean
+cd clean
+pip install -r requirements.txt
+streamlit run app.py
+```
+
+### Headless CLI
+
+```bash
+export PYTHONPATH=/path/to/hercule-outreach:/path/to/hercule-outreach/clean
+cd clean
 python cli.py credits
 python cli.py export-mev --list-id <uuid> -o mev_emails.csv
 python cli.py audit-list --list-id <uuid>
@@ -30,7 +31,7 @@ python cli.py run --list-id <uuid> --campaign-id <uuid> --mode test_50
 python cli.py checkpoints
 ```
 
-See [doc/render-outreach.md](../../doc/render-outreach.md) for Render deployment.
+Copy [`.env.example`](../.env.example) to repo root `.env` before running.
 
 ## Environment
 

@@ -1,10 +1,6 @@
 # Streamlit Scraper
 
-## AI agents
-
-Before editing this app, read:
-1. [`.cursor/skills/hercule-streamlit/SKILL.md`](../../../.cursor/skills/hercule-streamlit/SKILL.md) (router)
-2. [`.cursor/skills/hercule-streamlit-scraper/SKILL.md`](../../../.cursor/skills/hercule-streamlit-scraper/SKILL.md)
+Repo layout: [`scraper/`](.) (this app), [`clean/`](../clean), [`shared/`](../shared), [`satellites/`](../satellites) (prompts / subsequence helpers only).
 
 ## Architecture
 
@@ -24,13 +20,22 @@ Presets are **flat** (no niche groups). Each preset lives in [`configs/`](config
 
 ## Setup
 
+From repo root (see [`Makefile`](../Makefile)):
+
 ```bash
-cd lib/backend/streamlit_scraper
-pip install -r requirements.txt
-pnpm streamlit-scraper
+make venv
+make dev-scraper
 ```
 
-Required in repo root [`.env`](../../.env):
+Or manually:
+
+```bash
+cd scraper
+pip install -r requirements.txt
+streamlit run app.py
+```
+
+Required in repo root [`.env`](../.env) (copy from [`.env.example`](../.env.example)):
 
 | Variable | Purpose |
 |----------|---------|
@@ -118,37 +123,7 @@ Checkpoint `instantly_pushed` = pushes credited to **this preset run** only.
 
 For `instantly_pushed`, the worker and pipeline completion both use **live-first** semantics: `target_progress_value` prefers the live list count when the API responds. The checkpoint can exceed `TARGET_LEADS` (e.g. partial pushes before Instantly 429 defer, list purges) without stopping Outscraper; the run completes only when **live ≥ target** (or checkpoint ≥ target if live is unavailable).
 
-### Pipeline comptable (VPS)
-
-Single worker — postal + INSEE communes, taxonomy gate on Outscraper `type` / `category` / `subtypes`:
-
-| systemd unit | Preset | Target |
-|--------------|--------|--------|
-| `hercule-scraper-comptable-fresh-geo` | `cabinets_expertise_comptable_fresh_geo` | `instantly_pushed_run` (10K checkpoint) |
-
-List Instantly : `bfb0fc90-ec59-4d49-b266-3891f59d3ea8`. Tuning recommandé dans l'unité systemd : `OUTSCRAPER_CONCURRENCY=16`, `OUTSCRAPER_POLL_INITIAL_S=10`.
-
-```bash
-sudo VPS_SCRAPER_SERVICE=hercule-scraper-comptable-fresh-geo \
-     SCRAPER_PRESET=cabinets_expertise_comptable_fresh_geo \
-     bash lib/backend/scripts/vps/install-scraper.sh
-sudo systemctl start hercule-scraper-comptable-fresh-geo
-```
-
-### Courtiers prévoyance B2B (VPS)
-
-| systemd unit | Preset | Filtering | Target |
-|--------------|--------|-----------|--------|
-| `hercule-scraper-prevoyance` | `courtiers_prevoyance_b2b` | Taxonomy anti-retail / réseaux | `instantly_pushed` (10K live list) |
-
-```bash
-sudo VPS_SCRAPER_SERVICE=hercule-scraper-prevoyance \
-     SCRAPER_PRESET=courtiers_prevoyance_b2b \
-     bash lib/backend/scripts/vps/install-scraper.sh
-sudo systemctl start hercule-scraper-prevoyance
-```
-
-Output is isolated per preset under `$HERCULE_DATA_ROOT/streamlit_scraper/output/{preset_id}/`. Heal cron is per-preset (`heal-{preset}.log`).
+Long-running presets (e.g. `cabinets_expertise_comptable_fresh_geo`, `courtiers_prevoyance_b2b`) are usually driven with `python main.py worker-loop` on a host where `$HERCULE_DATA_ROOT` is set. Output is isolated per preset under `$HERCULE_DATA_ROOT/streamlit_scraper/output/{preset_id}/` (or `scraper/output/` under the repo when running locally).
 
 #### Funnel comptable — taux d'acceptation et taxonomy
 
@@ -158,7 +133,7 @@ Audit reproductible :
 python main.py audit-filter --preset cabinets_expertise_comptable_fresh_geo
 ```
 
-Rejet typique : `duplicate company (domain) or email` quand la geo est saturée → relancer un reload geo ou avancer de pass. Revue manuelle : [`docs/taxonomy_review_manual.md`](docs/taxonomy_review_manual.md).
+Rejet typique : `duplicate company (domain) or email` quand la geo est saturée → relancer un reload geo ou avancer de pass. Inspect `filter_audit.csv` under the preset output dir for taxonomy rejects.
 
 ## Resume / checkpoint
 
@@ -168,87 +143,16 @@ Rejet typique : `duplicate company (domain) or email` quand la geo est saturée 
 - `incomplete` runs are **resumable** — use Continue / worker-loop
 - Resume blocked only if config fingerprint changed (wipe local first)
 
-## VPS worker
+## VPS worker (optional)
 
-On the VPS (once repo is deployed):
+When `VPS_HOST` / `VPS_USER` are set, the Streamlit **Scrape** page can start or stop a remote worker over SSH (see `.env.example`). Deploy the repo on the host, set `SCRAPER_PRESET` and `HERCULE_DATA_ROOT`, then run `python main.py worker-loop` (or your own systemd unit). Progress uses Instantly live count when configured and won't reset to 0 on rerun.
 
-```bash
-export SCRAPER_PRESET=cabinets_expertise_comptable
-export HERCULE_DATA_ROOT=/var/lib/hercule
-sudo bash lib/backend/scripts/vps/install-scraper.sh
-sudo systemctl start hercule-scraper
-```
+## Metrics exporter
 
-From your Mac: open sidebar **Scrape** → **Continue / Start worker**. Progress uses Instantly live count and won't reset to 0 on rerun.
-
-Helper scripts: [`lib/backend/scripts/vps/install-scraper.sh`](../../scripts/vps/install-scraper.sh), `heal-scraper.sh`, `run-worker-loop.sh`.
-
-## Monitoring (Grafana fleet dashboard)
-
-Read-only observability for all scrapers on the VPS — **no control**, replaces SSH polling for the multi-scraper view. Streamlit Scrape page stays for start/stop.
-
-### Stack
-
-| Component | Role | Port (localhost) |
-|-----------|------|------------------|
-| `hercule-scraper-exporter` (systemd) | Reads `worker_heartbeat.json` + `scrape_state.json` → Prometheus metrics | `:9464` |
-| Prometheus | Time series (15d retention) | `:9090` |
-| Grafana | Dashboards | `:3000` |
-| Loki + Promtail | Tail `scrape.log` per preset | `:3100` |
-| node_exporter | CPU / RAM / disk | `:9100` |
-
-Code: [`monitoring/exporter.py`](monitoring/exporter.py) · Compose: [`lib/backend/scripts/vps/monitoring/`](../../scripts/vps/monitoring/)
-
-### Install (on VPS)
-
-Requires Docker Engine + Compose plugin.
+[`monitoring/exporter.py`](monitoring/exporter.py) exposes Prometheus metrics from `worker_heartbeat.json` and `scrape_state.json`. Local smoke test:
 
 ```bash
-export HERCULE_DATA_ROOT=/var/lib/hercule
-export VPS_REPO_ROOT=/root/hercule.dev   # if different
-sudo bash lib/backend/scripts/vps/install-monitoring.sh
-```
-
-This installs/enables `hercule-scraper-exporter`, generates a Grafana admin password at `/root/.hercule/grafana-admin-password`, and starts the Compose stack (bound to `127.0.0.1` only).
-
-### Access from your Mac
-
-```bash
-ssh -L 3000:127.0.0.1:3000 $VPS_USER@$VPS_HOST
-# password: ssh $VPS_USER@$VPS_HOST 'cat /root/.hercule/grafana-admin-password'
-open http://127.0.0.1:3000
-```
-
-Login: `admin` / password from the file above. Dashboard: **Hercule → Hercule Scraper Fleet**.
-
-### Metrics exposed
-
-```
-scraper_heartbeat_age_seconds{preset}
-scraper_worker_up{preset}                 # 1 if heartbeat age < 15 min
-scraper_status_info{preset,status}        # running|stalled|idle|complete|blocked
-scraper_target_leads / scraper_progress_leads / scraper_progress_ratio
-scraper_leads_saved / scraper_leads_enriched_* / scraper_instantly_pushed
-scraper_inflight_tasks / scraper_batch_* / scraper_query_pass
-scraper_systemd_active{service}
-```
-
-Progress uses checkpoint fields only (no Instantly live API) — same as `TARGET_MODE=instantly_pushed_run` semantics for shared lists.
-
-### Troubleshooting
-
-| Symptom | Check |
-|---------|--------|
-| Empty fleet table | `curl -s localhost:9464/metrics \| grep scraper_` — exporter up? presets under `$HERCULE_DATA_ROOT/streamlit_scraper/output/`? |
-| Exporter down | `journalctl -u hercule-scraper-exporter -n 50` · `systemctl restart hercule-scraper-exporter` |
-| No logs in Grafana | Promtail mounts data root — confirm `HERCULE_DATA_ROOT` matches install · `docker logs hercule-promtail` |
-| Disk gauge red | node_exporter — free space under `/` or `/var/lib/hercule` |
-| Restart stack | `cd lib/backend/scripts/vps/monitoring && HERCULE_DATA_ROOT=… GRAFANA_ADMIN_PASSWORD=$(cat /root/.hercule/grafana-admin-password) docker compose up -d` |
-
-Local smoke test (no Docker):
-
-```bash
-cd lib/backend/streamlit_scraper
+cd scraper
 python -m monitoring.exporter --once --data-root /var/lib/hercule
 ```
 
