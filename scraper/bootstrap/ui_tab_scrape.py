@@ -32,6 +32,7 @@ from bootstrap.vps_control import (
     n8n_scrape_webhook_configured,
     resolve_scrape_default_preset_id,
     resolve_scrape_tracking_preset_id,
+    stop_worker,
     trigger_n8n_scrape,
     vps_configured,
     worker_status,
@@ -155,6 +156,13 @@ def _render_launch_controls() -> None:
     st.subheader("Lancer un scrape")
 
     n8n_ready = n8n_scrape_webhook_configured()
+    if n8n_ready:
+        st.caption(
+            "Déclenchement via **webhook n8n** (`N8N_SCRAPE_WEBHOOK_URL`). "
+            "Preset VPS implicite : `SCRAPE_DEFAULT_PRESET` / `N8N_DEFAULT_PRESET` ou `_adhoc`."
+        )
+    elif not vps_configured():
+        st.caption("Configurez `N8N_SCRAPE_WEBHOOK_URL` pour lancer un scrape.")
 
     keyword_default, target_default, _config_list_id = load_adhoc_scrape_form_defaults()
 
@@ -189,12 +197,21 @@ def _render_launch_controls() -> None:
     if missing_list and n8n_ready:
         st.caption("Sélectionnez une liste Instantly.")
 
-    if st.button(
-        "Lancer",
+    ctrl1, ctrl2, ctrl3 = st.columns(3)
+    n8n_btn = ctrl1.button(
+        "Lancer le scrape",
         type="primary",
         disabled=disabled_launch,
         key="scrape_trigger_n8n",
-    ):
+    )
+    pause_btn = ctrl2.button(
+        "Arrêter worker VPS",
+        disabled=not vps_configured(),
+        key="scrape_pause_worker",
+    )
+    refresh_btn = ctrl3.button("Actualiser", key="scrape_refresh")
+
+    if n8n_btn:
         list_id = str(selected_list["id"]) if selected_list else ""
         ok, message = trigger_n8n_scrape(
             keyword=keyword,
@@ -203,7 +220,7 @@ def _render_launch_controls() -> None:
         )
         if ok:
             store_scrape_run_context(
-                resolve_scrape_tracking_preset_id(),
+                resolve_scrape_default_preset_id(),
                 keyword=keyword,
                 instantly_list_id=list_id,
                 instantly_list_name=str(selected_list.get("name", "")) if selected_list else "",
@@ -212,6 +229,17 @@ def _render_launch_controls() -> None:
             st.success(message)
         else:
             st.error(message)
+        st.rerun()
+
+    if pause_btn:
+        ok, message = stop_worker()
+        if ok:
+            st.success(message)
+        else:
+            st.warning(message)
+        st.rerun()
+
+    if refresh_btn:
         st.rerun()
 
 
