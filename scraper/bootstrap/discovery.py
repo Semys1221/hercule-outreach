@@ -1,16 +1,16 @@
-"""Auto-discover scraper presets from *_config.py modules."""
+"""Discover scraper presets from scraper/presets.yaml."""
 
 from __future__ import annotations
 
-import importlib
 import os
-import sys
 from collections.abc import Callable
 from dataclasses import dataclass
 from typing import Any
 
+import yaml
+
 _LIB_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-_CONFIGS_DIR = os.path.join(_LIB_DIR, "configs")
+_PRESETS_PATH = os.path.join(_LIB_DIR, "presets.yaml")
 _CACHE: dict[str, PresetMeta] | None = None
 
 
@@ -26,76 +26,18 @@ class PresetMeta:
     subniche_label: str = ""
 
 
-def _ensure_lib_on_path() -> None:
-    for path in (_LIB_DIR, _CONFIGS_DIR):
-        if path not in sys.path:
-            sys.path.insert(0, path)
+def presets_manifest_path() -> str:
+    return _PRESETS_PATH
 
 
-def _expected_module_name(preset_id: str) -> str:
-    return f"{preset_id}_config"
-
-
-def _iter_config_files() -> list[tuple[str, str]]:
-    """Return (filename, absolute path) for presets under configs/ only."""
-    found: list[tuple[str, str]] = []
-    if not os.path.isdir(_CONFIGS_DIR):
-        return found
-    for filename in sorted(os.listdir(_CONFIGS_DIR)):
-        if not filename.endswith("_config.py") or filename.startswith("._"):
-            continue
-        found.append((filename, os.path.join(_CONFIGS_DIR, filename)))
-    return found
-
-
-def _load_preset_file(filename: str, config_path: str) -> PresetMeta:
-    module_name = filename[:-3]
-    module = importlib.import_module(module_name)
-    preset_id = getattr(module, "PRESET_ID", None)
-    label = getattr(module, "PRESET_LABEL", None)
-    config = getattr(module, "CONFIG", None)
-
-    if not isinstance(preset_id, str) or not preset_id.strip():
-        raise ValueError(f"{filename}: missing PRESET_ID")
-    if not isinstance(label, str) or not label.strip():
-        raise ValueError(f"{filename}: missing PRESET_LABEL")
-    if not isinstance(config, dict):
-        raise ValueError(f"{filename}: missing CONFIG dict")
-
-    preset_id = preset_id.strip()
-    if _expected_module_name(preset_id) != module_name:
-        raise ValueError(
-            f"{filename}: PRESET_ID {preset_id!r} must match file "
-            f"{_expected_module_name(preset_id)}.py"
-        )
-
-    niche_group = str(getattr(module, "NICHE_GROUP", "") or "").strip()
-    niche_group_label = str(getattr(module, "NICHE_GROUP_LABEL", "") or "").strip()
-    subniche_label = str(getattr(module, "SUBNICHE_LABEL", "") or "").strip()
-    if isinstance(config, dict):
-        if not niche_group:
-            niche_group = str(config.get("NICHE_GROUP") or "").strip()
-        if not niche_group_label:
-            niche_group_label = str(config.get("NICHE_GROUP_LABEL") or "").strip()
-        if not subniche_label:
-            subniche_label = str(config.get("SUBNICHE_LABEL") or "").strip()
-    if not niche_group:
-        niche_group = preset_id
-    if not niche_group_label:
-        niche_group_label = label.strip()
-    if not subniche_label:
-        subniche_label = label.strip()
-
-    return PresetMeta(
-        preset_id=preset_id,
-        label=label.strip(),
-        module_name=module_name,
-        config_path=config_path,
-        loader=lambda m=module: dict(m.CONFIG),
-        niche_group=niche_group,
-        niche_group_label=niche_group_label,
-        subniche_label=subniche_label,
-    )
+def _load_manifest() -> dict[str, Any]:
+    if not os.path.isfile(_PRESETS_PATH):
+        return {"presets": {}}
+    with open(_PRESETS_PATH, encoding="utf-8") as handle:
+        data = yaml.safe_load(handle) or {}
+    if not isinstance(data, dict):
+        raise ValueError(f"{_PRESETS_PATH}: expected mapping at root")
+    return data
 
 
 def discover_presets(*, use_cache: bool = True) -> dict[str, PresetMeta]:
@@ -103,14 +45,40 @@ def discover_presets(*, use_cache: bool = True) -> dict[str, PresetMeta]:
     if use_cache and _CACHE is not None:
         return dict(_CACHE)
 
-    _ensure_lib_on_path()
-    found: dict[str, PresetMeta] = {}
+    manifest = _load_manifest()
+    raw_presets = manifest.get("presets") or {}
+    if not isinstance(raw_presets, dict):
+        raise ValueError(f"{_PRESETS_PATH}: presets must be a mapping")
 
-    for filename, config_path in _iter_config_files():
-        meta = _load_preset_file(filename, config_path)
-        if meta.preset_id in found:
-            raise ValueError(f"Duplicate PRESET_ID {meta.preset_id!r}")
-        found[meta.preset_id] = meta
+    found: dict[str, PresetMeta] = {}
+    for preset_id, entry in sorted(raw_presets.items()):
+        if not isinstance(entry, dict):
+            raise ValueError(f"preset {preset_id!r}: expected mapping")
+        label = str(entry.get("label") or preset_id).strip()
+        config = entry.get("config")
+        if not isinstance(config, dict):
+            raise ValueError(f"preset {preset_id!r}: missing config dict")
+        niche_group = str(entry.get("niche_group") or preset_id).strip()
+        niche_group_label = str(entry.get("niche_group_label") or label).strip()
+        subniche_label = str(entry.get("subniche_label") or label).strip()
+        cfg_copy = dict(config)
+
+        def _loader(c: dict[str, Any] = cfg_copy) -> dict[str, Any]:
+            return dict(c)
+
+        meta = PresetMeta(
+            preset_id=preset_id,
+            label=label,
+            module_name=f"{preset_id}_config",
+            config_path=_PRESETS_PATH,
+            loader=_loader,
+            niche_group=niche_group,
+            niche_group_label=niche_group_label,
+            subniche_label=subniche_label,
+        )
+        if preset_id in found:
+            raise ValueError(f"Duplicate PRESET_ID {preset_id!r}")
+        found[preset_id] = meta
 
     if use_cache:
         _CACHE = dict(found)
@@ -123,17 +91,15 @@ def invalidate_preset_cache() -> None:
 
 
 def preset_config_path(preset_id: str) -> str:
-    """Path for a preset config file (always under configs/)."""
-    return os.path.join(_CONFIGS_DIR, f"{preset_id}_config.py")
+    return _PRESETS_PATH
 
 
 def configs_dir() -> str:
-    return _CONFIGS_DIR
+    return os.path.dirname(_PRESETS_PATH)
 
 
 def is_configs_preset(preset_id: str) -> bool:
-    path = preset_config_path(preset_id)
-    return os.path.dirname(os.path.abspath(path)) == os.path.abspath(_CONFIGS_DIR)
+    return preset_id in discover_presets(use_cache=True)
 
 
 def _uuid(value: Any) -> str:
@@ -141,7 +107,6 @@ def _uuid(value: Any) -> str:
 
 
 def list_niche_groups(*, use_cache: bool = True) -> dict[str, list[PresetMeta]]:
-    """Group presets by niche_group; standalone presets form single-item groups."""
     presets = discover_presets(use_cache=use_cache)
     groups: dict[str, list[PresetMeta]] = {}
     for meta in presets.values():
@@ -157,7 +122,6 @@ def presets_in_group(group_id: str, *, use_cache: bool = True) -> list[str]:
 
 
 def all_dedup_list_ids(preset_id: str, *, use_cache: bool = True) -> list[str]:
-    """List IDs for dedup — own preset only (flat presets, no niche groups)."""
     presets = discover_presets(use_cache=use_cache)
     meta = presets.get(preset_id)
     if meta is None:
@@ -167,7 +131,6 @@ def all_dedup_list_ids(preset_id: str, *, use_cache: bool = True) -> list[str]:
 
 
 def all_dedup_campaign_ids(preset_id: str, *, use_cache: bool = True) -> list[str]:
-    """Campaign IDs for dedup — primary + INSTANTLY_DEDUP_CAMPAIGN_IDS from preset config."""
     presets = discover_presets(use_cache=use_cache)
     meta = presets.get(preset_id)
     if meta is None:

@@ -1,4 +1,4 @@
-"""Shared Streamlit session helpers for onboarding and scrape pages."""
+"""Shared Streamlit session helpers for scrape pages."""
 
 from __future__ import annotations
 

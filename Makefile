@@ -2,7 +2,7 @@ ROOT := $(dir $(abspath $(lastword $(MAKEFILE_LIST))))
 export PYTHONPATH := $(ROOT):$(ROOT)/scraper:$(ROOT)/clean
 VENV := $(ROOT).venv/bin/python
 
-.PHONY: venv dev-scraper dev-clean test test-scraper clean-cli-credits
+.PHONY: venv dev-scraper dev-clean test clean-cli-credits
 
 venv:
 	python3 -m venv $(ROOT).venv
@@ -15,10 +15,8 @@ dev-scraper:
 dev-clean:
 	cd $(ROOT)clean && streamlit run app.py
 
-test-scraper:
-	cd $(ROOT)scraper && python -m pytest tests/ -q
-
-test: test-scraper
+test:
+	cd $(ROOT)clean && python -m pytest tests/ -q
 
 clean-cli-credits:
 	cd $(ROOT)clean && python cli.py credits

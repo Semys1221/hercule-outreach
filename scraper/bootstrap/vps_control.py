@@ -1,25 +1,22 @@
-"""SSH control for VPS scrape worker (used by Scrape page operations panel)."""
+"""SSH read for VPS scrape artifacts; n8n webhook trigger for launches."""
 
 from __future__ import annotations
 
+import json
 import os
 import shlex
-import subprocess
-import sys
 import time
 from dataclasses import dataclass
 from typing import Any
 
 import config_loader  # noqa: F401 — loads repo .env via outreach_root()
 
+from repo_paths import outreach_root
+
 _SSH_CONNECT_TIMEOUT = 10
 _SSH_BACKOFF_SECONDS = 45
 _ssh_backoff_until: float = 0.0
 _ssh_last_error: str = ""
-
-from repo_paths import outreach_root
-
-_REPO_ROOT = str(outreach_root())
 
 
 @dataclass
@@ -53,6 +50,10 @@ def vps_configured() -> bool:
     return VpsConfig.from_env() is not None
 
 
+def n8n_scrape_webhook_configured() -> bool:
+    return bool(os.getenv("N8N_SCRAPE_WEBHOOK_URL", "").strip())
+
+
 def vps_ssh_key_configured(cfg: VpsConfig | None = None) -> bool:
     cfg = cfg or VpsConfig.from_env()
     if not cfg or not cfg.key_path:
@@ -61,7 +62,6 @@ def vps_ssh_key_configured(cfg: VpsConfig | None = None) -> bool:
 
 
 def vps_ssh_auth_hint(cfg: VpsConfig | None = None) -> str:
-    """Actionable hint when SSH auth is misconfigured."""
     cfg = cfg or VpsConfig.from_env()
     if not cfg:
         return "Définissez `VPS_HOST` et `VPS_USER` dans le `.env` du repo."
@@ -134,13 +134,12 @@ def _connect_ssh(cfg: VpsConfig):
     return client
 
 
-
 def _ssh_exec(cfg: VpsConfig, command: str, *, timeout: int = 120) -> tuple[int, str, str]:
     if _ssh_in_backoff():
         return 1, "", _ssh_last_error or "SSH unavailable (retrying shortly)"
 
     try:
-        import paramiko  # noqa: F401 — availability check
+        import paramiko  # noqa: F401
     except ImportError:
         return 1, "", "paramiko not installed"
 
@@ -167,7 +166,6 @@ def _ssh_fetch_files(
     *,
     timeout: int = 60,
 ) -> dict[str, str]:
-    """Read multiple remote files over one SSH session."""
     empty = {path: "" for path in remote_paths}
     if not remote_paths:
         return empty
@@ -205,14 +203,6 @@ def _ssh_fetch_files(
         return empty
 
 
-def _remote_env(cfg: VpsConfig) -> str:
-    return (
-        f"export HERCULE_DATA_ROOT={shlex.quote(cfg.data_root)} "
-        f"SCRAPER_PRESET={shlex.quote(os.getenv('SCRAPER_PRESET', ''))} "
-        f"PYTHONPATH={shlex.quote(cfg.repo_root)}"
-    )
-
-
 def worker_status(cfg: VpsConfig | None = None) -> dict[str, Any]:
     cfg = cfg or VpsConfig.from_env()
     if not cfg:
@@ -241,26 +231,37 @@ def worker_status(cfg: VpsConfig | None = None) -> dict[str, Any]:
     }
 
 
-def start_worker(preset: str, *, cfg: VpsConfig | None = None) -> tuple[bool, str]:
-    cfg = cfg or VpsConfig.from_env()
-    if not cfg:
-        return _start_local_worker(preset)
-    cmd = f"systemctl start {shlex.quote(cfg.service_name)}"
-    code, out, err = _ssh_exec(cfg, cmd, timeout=60)
-    if code == 0:
-        return True, out.strip() or "Worker started on VPS."
-    return False, err.strip() or out.strip() or f"systemctl failed ({code})"
-
-
 def stop_worker(*, cfg: VpsConfig | None = None) -> tuple[bool, str]:
     cfg = cfg or VpsConfig.from_env()
     if not cfg:
-        return _stop_local_worker()
+        return False, "VPS not configured — cannot stop worker."
     cmd = f"systemctl stop {shlex.quote(cfg.service_name)}"
     code, out, err = _ssh_exec(cfg, cmd, timeout=60)
     if code == 0:
         return True, "Worker stopped on VPS."
     return False, err.strip() or out.strip() or f"systemctl failed ({code})"
+
+
+def trigger_n8n_scrape(preset_id: str) -> tuple[bool, str]:
+    """POST preset_id to N8N_SCRAPE_WEBHOOK_URL (preferred launch path)."""
+    url = os.getenv("N8N_SCRAPE_WEBHOOK_URL", "").strip()
+    if not url:
+        return (
+            False,
+            "Définissez `N8N_SCRAPE_WEBHOOK_URL` dans le `.env` pour lancer un scrape via n8n.",
+        )
+    try:
+        import httpx
+
+        payload = {"preset_id": preset_id, "preset": preset_id}
+        with httpx.Client(timeout=30.0) as client:
+            response = client.post(url, json=payload)
+        if response.status_code >= 400:
+            body = response.text.strip()[:500]
+            return False, f"n8n webhook HTTP {response.status_code}: {body or 'empty body'}"
+        return True, "Scrape déclenché via n8n."
+    except Exception as exc:
+        return False, f"n8n webhook failed: {exc}"
 
 
 def fetch_remote_file(remote_path: str, *, cfg: VpsConfig | None = None) -> str:
@@ -274,8 +275,6 @@ def fetch_remote_file(remote_path: str, *, cfg: VpsConfig | None = None) -> str:
 
 
 def _parse_json_dict(raw: str) -> dict | None:
-    import json
-
     if not raw.strip():
         return None
     try:
@@ -286,8 +285,6 @@ def _parse_json_dict(raw: str) -> dict | None:
 
 
 def _parse_jsonl_events(raw: str, *, max_lines: int) -> list[dict]:
-    import json
-
     events: list[dict] = []
     lines = [line for line in raw.splitlines() if line.strip()]
     for line in lines[-max_lines:]:
@@ -307,25 +304,14 @@ def load_panel_state(
     max_cron_lines: int = 10,
 ) -> tuple[dict | None, str, str, dict | None, list[dict]]:
     """Return (scrape_state, log_tail, out_dir, heartbeat, cron_events) from VPS or local."""
-    import json
-
+    from paths import output_paths
+    from scrape_log import tail_scrape_log
     from scrape_metrics import cron_events_path, heartbeat_path, load_worker_heartbeat, tail_cron_events
 
-    panel_started = time.monotonic()
     cfg = VpsConfig.from_env()
     if not cfg:
-        from core_logic import output_paths
-        from scrape_log import tail_scrape_log
-
         local_paths = output_paths(preset)
-        state = None
-        state_path = local_paths.scrape_state
-        if os.path.isfile(state_path):
-            try:
-                with open(state_path, encoding="utf-8") as handle:
-                    state = json.load(handle)
-            except (OSError, json.JSONDecodeError):
-                state = None
+        state = load_scrape_state_file(local_paths.scrape_state)
         return (
             state,
             tail_scrape_log(local_paths.out_dir, max_lines=max_log_lines),
@@ -340,11 +326,7 @@ def load_panel_state(
     heartbeat_file = heartbeat_path(out_dir)
     cron_path = cron_events_path(out_dir)
     remote_paths = [state_path, log_path, heartbeat_file, cron_path]
-    remote_files = _ssh_fetch_files(
-        cfg,
-        remote_paths,
-        timeout=60,
-    )
+    remote_files = _ssh_fetch_files(cfg, remote_paths, timeout=60)
     state = _parse_json_dict(remote_files.get(state_path, ""))
     log_tail = remote_files.get(log_path, "")
     if log_tail:
@@ -358,80 +340,22 @@ def load_panel_state(
     return state, log_tail, out_dir, heartbeat, cron_events
 
 
+def load_scrape_state_file(state_path: str) -> dict | None:
+    from scrape_state import load_scrape_state
+
+    return load_scrape_state(state_path)
+
+
 def remote_preset_out_dir(preset: str, cfg: VpsConfig | None = None) -> str:
+    from paths import output_paths
+
     cfg = cfg or VpsConfig.from_env()
     data_root = cfg.data_root if cfg else os.getenv("HERCULE_DATA_ROOT", "").strip()
     if data_root:
         return os.path.join(data_root, "streamlit_scraper", "output", preset)
-    from core_logic import output_paths
-
     return output_paths(preset).out_dir
-
-
-def remote_csv_lead_count(preset: str, *, cfg: VpsConfig | None = None) -> int | None:
-    """Return lead row count from remote CSV (header excluded), or None if unavailable."""
-    cfg = cfg or VpsConfig.from_env()
-    if not cfg:
-        return None
-    csv_path = os.path.join(remote_preset_out_dir(preset, cfg), "outscraper_leads.csv")
-    cmd = (
-        f"if [ -f {shlex.quote(csv_path)} ]; then "
-        f"expr $(wc -l < {shlex.quote(csv_path)}) - 1; else echo 0; fi"
-    )
-    code, out, _ = _ssh_exec(cfg, cmd, timeout=30)
-    if code != 0:
-        return None
-    try:
-        return max(int(out.strip()), 0)
-    except ValueError:
-        return None
 
 
 def tail_scrape_log_local_or_remote(preset: str) -> str:
     _, log_tail, _, _, _ = load_panel_state(preset)
     return log_tail
-
-
-_LOCAL_WORKER_PID_FILE = os.path.join(_REPO_ROOT, ".scraper_worker.pid")
-
-
-def _start_local_worker(preset: str) -> tuple[bool, str]:
-    scraper_dir = os.path.join(_REPO_ROOT, "scraper")
-    log_path = os.path.join(scraper_dir, "output", preset, "worker.log")
-    os.makedirs(os.path.dirname(log_path), exist_ok=True)
-    env = os.environ.copy()
-    env["PYTHONPATH"] = os.path.pathsep.join([_REPO_ROOT, scraper_dir])
-    env["SCRAPER_PRESET"] = preset
-    cmd = [
-        sys.executable,
-        "main.py",
-        "worker-loop",
-        "--preset",
-        preset,
-        "--push-instantly",
-    ]
-    with open(log_path, "a", encoding="utf-8") as log_handle:
-        proc = subprocess.Popen(
-            cmd,
-            cwd=scraper_dir,
-            env=env,
-            stdout=log_handle,
-            stderr=subprocess.STDOUT,
-            start_new_session=True,
-        )
-    with open(_LOCAL_WORKER_PID_FILE, "w", encoding="utf-8") as handle:
-        handle.write(str(proc.pid))
-    return True, f"Local worker started (pid {proc.pid})."
-
-
-def _stop_local_worker() -> tuple[bool, str]:
-    if not os.path.isfile(_LOCAL_WORKER_PID_FILE):
-        return False, "No local worker pid file."
-    try:
-        with open(_LOCAL_WORKER_PID_FILE, encoding="utf-8") as handle:
-            pid = int(handle.read().strip())
-        os.kill(pid, 15)
-        os.remove(_LOCAL_WORKER_PID_FILE)
-        return True, f"Local worker stopped (pid {pid})."
-    except (OSError, ValueError) as exc:
-        return False, str(exc)

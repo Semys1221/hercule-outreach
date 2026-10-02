@@ -22,15 +22,16 @@ from bootstrap.scrape_run_history import (
 from bootstrap.vps_control import (
     format_vps_connection_warning,
     load_panel_state,
-    start_worker,
+    n8n_scrape_webhook_configured,
     stop_worker,
+    trigger_n8n_scrape,
     vps_configured,
     worker_status,
 )
 from config_loader import load_config
+from paths import output_paths
 from scrape_metrics import heartbeat_age_seconds
-from scrape_state import detect_recoverable_run, is_instantly_push_mode, target_mode
-from core_logic import output_paths
+from scrape_state import is_instantly_push_mode, load_scrape_state, target_mode, ui_target_progress
 
 
 def _worker_state_label(heartbeat: dict | None, vps_active: bool) -> str:
@@ -113,7 +114,7 @@ def _render_n8n_executions(*, expanded: bool = False) -> None:
             )
 
 
-def _render_worker_controls(
+def _render_launch_controls(
     preset_id: str,
     *,
     at_target: bool,
@@ -121,40 +122,50 @@ def _render_worker_controls(
     has_instantly: bool,
     vps: dict[str, Any] | None = None,
 ) -> None:
-    if not vps_configured():
-        st.subheader("Lancer un scrape")
+    st.subheader("Lancer un scrape")
+
+    n8n_ready = n8n_scrape_webhook_configured()
+    if n8n_ready:
         st.caption(
-            "Les scrapes s'exécutent **uniquement sur le VPS** (worker systemd, "
-            "souvent déclenché via n8n). Configurez `VPS_HOST` et `VPS_USER` dans `.env` "
-            "pour démarrer le worker et lire l'historique — pas d'exécution locale."
+            "Entrée recommandée : **webhook n8n** (`N8N_SCRAPE_WEBHOOK_URL`). "
+            "Le worker VPS peut être arrêté manuellement si besoin."
         )
-        if st.button("Actualiser", key="scrape_refresh"):
-            st.rerun()
-        return
+    elif vps_configured():
+        st.caption(
+            "Configurez `N8N_SCRAPE_WEBHOOK_URL` pour déclencher le flux n8n. "
+            "L'historique VPS reste disponible via SSH."
+        )
+    else:
+        st.caption(
+            "Configurez `N8N_SCRAPE_WEBHOOK_URL` et/ou `VPS_HOST` + `VPS_USER` "
+            "pour lancer ou suivre les scrapes."
+        )
 
     _, _, _, heartbeat, _ = load_panel_state(preset_id)
-    vps = vps or worker_status()
-    status_label = _worker_state_label(heartbeat, bool(vps.get("active")))
+    vps = vps or (worker_status() if vps_configured() else None)
+    status_label = _worker_state_label(heartbeat, bool(vps and vps.get("active")))
 
-    st.subheader("Lancer un scrape")
-    st.caption(
-        f"État worker : **{status_label}**. "
-        "Démarrage via **Démarrer worker VPS** (`start_worker` → systemd sur le VPS). "
-        "Si votre flux passe par n8n, le webhook/workflow n8n reste l'autre entrée."
-    )
+    if vps_configured():
+        st.caption(f"État worker VPS : **{status_label}**.")
+
+    disabled_launch = at_target or (is_instantly_push_mode(mode) and not has_instantly)
 
     ctrl1, ctrl2, ctrl3 = st.columns(3)
-    continue_btn = ctrl1.button(
-        "Démarrer worker VPS",
+    n8n_btn = ctrl1.button(
+        "Lancer via n8n",
         type="primary",
-        disabled=at_target or (is_instantly_push_mode(mode) and not has_instantly),
-        key="scrape_continue_worker",
+        disabled=disabled_launch or not n8n_ready,
+        key="scrape_trigger_n8n",
     )
-    pause_btn = ctrl2.button("Arrêter worker VPS", key="scrape_pause_worker")
+    pause_btn = ctrl2.button(
+        "Arrêter worker VPS",
+        disabled=not vps_configured(),
+        key="scrape_pause_worker",
+    )
     refresh_btn = ctrl3.button("Actualiser", key="scrape_refresh")
 
-    if continue_btn:
-        ok, message = start_worker(preset_id)
+    if n8n_btn:
+        ok, message = trigger_n8n_scrape(preset_id)
         if ok:
             st.success(message)
         else:
@@ -177,8 +188,9 @@ def _render_scrape_without_preset() -> None:
     vps_probe = worker_status() if vps_configured() else None
     if not vps_configured():
         st.info(
-            "Scraping **VPS uniquement** (n8n + worker systemd). "
-            "Ajoutez `VPS_HOST` / `VPS_USER` pour lire l'historique scrape à distance."
+            "Scraping **VPS / n8n**. "
+            "Ajoutez `VPS_HOST` / `VPS_USER` pour l'historique scrape à distance "
+            "ou `N8N_SCRAPE_WEBHOOK_URL` pour lancer."
         )
     elif vps_probe and not vps_probe.get("reachable", True):
         st.warning(
@@ -205,7 +217,7 @@ def _render_scrape_without_preset() -> None:
             st.warning(f"n8n — {n8n_err}")
     _render_n8n_executions(expanded=not table_rows)
 
-    if vps_configured():
+    if vps_configured() or n8n_scrape_webhook_configured():
         if st.button("Actualiser", key="scrape_refresh_no_preset"):
             st.rerun()
 
@@ -217,31 +229,32 @@ def render_scrape_tab(preset_id: str) -> None:
 
     config = load_config(preset_id, require_keys=False)
     paths = output_paths(preset_id)
-    recovery = detect_recoverable_run(config, paths.csv, state_path=paths.scrape_state)
-    target = int(config.get("TARGET_LEADS", 0))
+    state, _, _, _, _ = load_panel_state(preset_id, max_log_lines=1, max_cron_lines=1)
+    if state is None:
+        state = load_scrape_state(paths.scrape_state)
+    _progress, _target, at_target = ui_target_progress(config, state)
     mode = target_mode(config)
     has_instantly = bool(config.get("INSTANTLY_API_KEY") and config.get("INSTANTLY_LIST_ID"))
-    at_target = recovery.headline_progress >= target > 0
 
     vps_probe = worker_status() if vps_configured() else None
-    if not vps_configured():
+    if not vps_configured() and not n8n_scrape_webhook_configured():
         st.info(
-            "Scraping **VPS uniquement** (n8n + worker systemd). "
-            "Ajoutez `VPS_HOST` / `VPS_USER` pour lire l'historique et démarrer le worker."
+            "Scraping **VPS / n8n**. "
+            "Ajoutez `VPS_HOST` / `VPS_USER` pour l'historique ou `N8N_SCRAPE_WEBHOOK_URL` pour lancer."
         )
     elif vps_probe and not vps_probe.get("reachable", True):
         st.warning(
             "Connexion VPS impossible — "
             f"{format_vps_connection_warning(vps_probe.get('detail', ''))}."
         )
-    else:
+    elif vps_configured():
         st.caption(
             f"VPS {os.getenv('VPS_HOST', '')} — données sous "
             f"`HERCULE_DATA_ROOT` (scrape_state, scrape.log, heartbeat)."
         )
 
     _status_and_history_panel(preset_id)
-    _render_worker_controls(
+    _render_launch_controls(
         preset_id,
         at_target=at_target,
         mode=mode,

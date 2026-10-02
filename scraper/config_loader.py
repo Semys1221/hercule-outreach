@@ -21,7 +21,7 @@ if os.path.isfile(_LOCAL_ENV):
     load_dotenv(_LOCAL_ENV, override=True)
 load_dotenv()
 
-DEFAULT_PRESET = "biggy_agency"
+DEFAULT_PRESET = "avocats"
 
 
 class _PresetRegistry(Mapping[str, Callable[[], dict[str, Any]]]):
@@ -111,11 +111,10 @@ def _env_int(name: str) -> int | None:
 
 
 def _inject_secrets(config: dict, *, require_keys: bool, preset: str) -> dict:
+    config["OUTSCRAPER_API_KEY"] = os.getenv("OUTSCRAPER_API_KEY", "").strip()
     if require_keys:
-        config["OUTSCRAPER_API_KEY"] = _require_env("OUTSCRAPER_API_KEY")
-        config["INSTANTLY_API_KEY"] = os.getenv("INSTANTLY_API_KEY", "").strip()
+        config["INSTANTLY_API_KEY"] = _require_env("INSTANTLY_API_KEY")
     else:
-        config["OUTSCRAPER_API_KEY"] = os.getenv("OUTSCRAPER_API_KEY", "").strip()
         config["INSTANTLY_API_KEY"] = os.getenv("INSTANTLY_API_KEY", "").strip()
 
     config["PAPPERS_API_KEY"] = os.getenv("PAPPERS_API_KEY", "").strip()
@@ -177,5 +176,5 @@ def load_config(preset: str = DEFAULT_PRESET, *, require_keys: bool = True) -> d
 
 
 def load_biggy_config(*, require_keys: bool = True) -> dict:
-    """Backward-compatible alias for load_config('biggy_agency')."""
-    return load_config("biggy_agency", require_keys=require_keys)
+    """Backward-compatible alias for the default preset."""
+    return load_config(DEFAULT_PRESET, require_keys=require_keys)

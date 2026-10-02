@@ -6,6 +6,7 @@ __pycache__/
 .DS_Store
 scraper/output/
 clean/output/
+clean/data/
 clean/checkpoints/
 *.log
 .scraper_worker.pid
