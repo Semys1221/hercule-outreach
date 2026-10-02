@@ -15,6 +15,13 @@ _RUN_START = re.compile(
 )
 _TARGET_REACHED = re.compile(r"Target reached — progress (\d+)/(\d+)")
 _WORKER_BLOCKED = re.compile(r"Worker blocked — (.+)")
+_SCRAPED_BATCH = re.compile(r"Scraped:\s*(\d+)\s*\|\s*Enriched:")
+_PIPELINE_COMPLETE = re.compile(
+    r"Pipeline complete\.\s*Scraped:\s*(\d+),\s*enriched valid:\s*\d+,\s*Instantly:\s*(\d+)"
+)
+_SCRAPED_INLINE = re.compile(r"scraped:\s*(\d+)", re.IGNORECASE)
+_INSTANTLY_INLINE = re.compile(r"Instantly:\s*(\d+)(?:/\d+)?", re.IGNORECASE)
+_ITERATION_PUSHED = re.compile(r"Iteration done — checkpoint pushed (\d+)")
 
 
 def _parse_log_ts(raw: str) -> str:
@@ -65,6 +72,41 @@ def parse_worker_runs_from_log(log_text: str) -> list[dict[str, Any]]:
         completed.append(open_run)
         open_run = None
 
+    def _track_metrics(line: str) -> None:
+        if not open_run:
+            return
+        batch = _SCRAPED_BATCH.search(line)
+        if batch:
+            val = int(batch.group(1))
+            prev = open_run.get("leads_saved")
+            open_run["leads_saved"] = max(int(prev or 0), val)
+            instantly = _INSTANTLY_INLINE.search(line)
+            if instantly:
+                ip = int(instantly.group(1))
+                prev_push = open_run.get("instantly_pushed")
+                open_run["instantly_pushed"] = max(int(prev_push or 0), ip)
+            return
+        complete = _PIPELINE_COMPLETE.search(line)
+        if complete:
+            open_run["leads_saved"] = int(complete.group(1))
+            open_run["instantly_pushed"] = int(complete.group(2))
+            return
+        scraped = _SCRAPED_INLINE.search(line)
+        if scraped:
+            val = int(scraped.group(1))
+            prev = open_run.get("leads_saved")
+            open_run["leads_saved"] = max(int(prev or 0), val)
+        pushed = _INSTANTLY_INLINE.search(line)
+        if pushed:
+            val = int(pushed.group(1))
+            prev = open_run.get("instantly_pushed")
+            open_run["instantly_pushed"] = max(int(prev or 0), val)
+        iteration = _ITERATION_PUSHED.search(line)
+        if iteration:
+            val = int(iteration.group(1))
+            prev = open_run.get("instantly_pushed")
+            open_run["instantly_pushed"] = max(int(prev or 0), val)
+
     for line in log_text.splitlines():
         ts_match = _LOG_TS.match(line)
         ts_raw = ts_match.group(1) if ts_match else ""
@@ -90,10 +132,14 @@ def parse_worker_runs_from_log(log_text: str) -> list[dict[str, Any]]:
         if not open_run:
             continue
 
+        _track_metrics(line)
+
         target_match = _TARGET_REACHED.search(line)
         if target_match:
             open_run["progress"] = int(target_match.group(1))
             open_run["target"] = int(target_match.group(2))
+            if open_run.get("leads_saved") is None:
+                open_run["leads_saved"] = open_run["progress"]
             _flush(end_ts=ts_iso, end_status="completed", note="Objectif atteint")
             continue
 
@@ -188,6 +234,91 @@ def merge_run_history(
     return rows[:max_rows]
 
 
+def _parse_ts_iso(iso: str) -> datetime | None:
+    if not iso:
+        return None
+    try:
+        dt = datetime.fromisoformat(iso.replace("Z", "+00:00"))
+        if dt.tzinfo is None:
+            dt = dt.replace(tzinfo=timezone.utc)
+        return dt.astimezone(timezone.utc)
+    except ValueError:
+        return None
+
+
+def duration_hours(start: str, end: str) -> float | None:
+    """Return elapsed hours when finish is after start."""
+    t0 = _parse_ts_iso(start)
+    t1 = _parse_ts_iso(end)
+    if t0 is None or t1 is None:
+        return None
+    delta = (t1 - t0).total_seconds()
+    if delta <= 0:
+        return None
+    return delta / 3600.0
+
+
+def leads_per_hour_label(scraped: Any, start: str, end: str) -> str:
+    if scraped is None:
+        return "—"
+    count = int(scraped)
+    hours = duration_hours(start, end)
+    if hours is None:
+        return "—"
+    if count <= 0:
+        return "0/h"
+    rate = count / hours
+    rounded = round(rate)
+    if abs(rate - rounded) < 0.05:
+        return f"{int(rounded)}/h"
+    if rate >= 100:
+        return f"{int(round(rate))}/h"
+    return f"{rate:.1f}/h"
+
+
+def _format_count(value: Any) -> str:
+    if value is None:
+        return "—"
+    try:
+        return f"{int(value):,}".replace(",", " ")
+    except (TypeError, ValueError):
+        return "—"
+
+
+def _niche_label(row: dict[str, Any]) -> str:
+    source = str(row.get("source") or "")
+    preset = str(row.get("preset") or "").strip()
+    if preset:
+        return preset
+    if source == "cron":
+        return "watchdog"
+    if source == "n8n":
+        return str(row.get("workflow") or "—")
+    return "—"
+
+
+def merge_n8n_into_history(
+    rows: list[dict[str, Any]],
+    executions: list[dict[str, Any]],
+    *,
+    preset_id: str | None = None,
+    max_rows: int = 25,
+) -> list[dict[str, Any]]:
+    """Append n8n execution rows (newest first), optionally filtered by preset."""
+    from bootstrap.n8n_read import execution_to_run_row, n8n_execution_matches_preset
+
+    combined = list(rows)
+    for item in executions:
+        if preset_id and not n8n_execution_matches_preset(item, preset_id):
+            continue
+        combined.append(execution_to_run_row(item))
+    combined.sort(
+        key=lambda item: str(item.get("started_at") or item.get("ended_at") or ""),
+        reverse=True,
+    )
+    return combined[:max_rows]
+
+
 def detect_scrape_running(
     preset_id: str,
     *,
@@ -230,37 +361,21 @@ def detect_scrape_running(
 
 
 def history_to_dataframe_rows(rows: list[dict[str, Any]]) -> list[dict[str, str]]:
-    """Flatten for st.dataframe display."""
+    """Flatten for st.dataframe display (Niche, times, counts, rate)."""
     out: list[dict[str, str]] = []
     for row in rows:
-        source = str(row.get("source") or "")
-        status_code = str(row.get("status") or "")
-        leads = row.get("leads_saved")
+        started = str(row.get("started_at") or "")
+        ended = str(row.get("ended_at") or "")
+        scraped = row.get("leads_saved")
         pushed = row.get("instantly_pushed")
-        enrich_ok = row.get("leads_enriched_valid")
-        rejected = row.get("leads_enriched_rejected")
-        inflight = row.get("inflight")
-        parts: list[str] = []
-        if leads is not None:
-            parts.append(f"CSV {leads}")
-        if enrich_ok is not None:
-            parts.append(f"valid {enrich_ok}")
-        if rejected is not None:
-            parts.append(f"rej. {rejected}")
-        if pushed is not None:
-            parts.append(f"push {pushed}")
-        if inflight:
-            parts.append(f"in-flight {inflight}")
-
         out.append(
             {
-                "Début": _short_ts(str(row.get("started_at") or "")),
-                "Fin": _short_ts(str(row.get("ended_at") or "")),
-                "Statut": _status_label_fr(status_code),
-                "Preset": str(row.get("preset") or ("—" if source != "cron" else "watchdog")),
-                "Objectif": _format_target(row),
-                "Leads / progrès": ", ".join(parts) if parts else "—",
-                "Détail": str(row.get("note") or "")[:160],
+                "Niche": _niche_label(row),
+                "Début": _short_ts(started),
+                "Fin": _short_ts(ended),
+                "Scrapés": _format_count(scraped),
+                "Poussés Instantly": _format_count(pushed),
+                "Débit /h": leads_per_hour_label(scraped, started, ended),
             }
         )
     return out

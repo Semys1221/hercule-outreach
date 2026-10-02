@@ -4,10 +4,16 @@ from __future__ import annotations
 
 import json
 import os
+import re
 import shlex
 import urllib.error
 import urllib.request
 from typing import Any
+
+_NICHE_FROM_NAME = re.compile(
+    r"(?:scrape|worker|hercule|outreach)[_\s\-/]+([a-z0-9][a-z0-9_\-]*)",
+    re.IGNORECASE,
+)
 
 
 def _api_key() -> str:
@@ -118,6 +124,131 @@ def _fetch_via_vps_ssh(api_key: str, *, limit: int) -> tuple[list[dict[str, Any]
     return _parse_executions_payload(payload, limit=limit)
 
 
+def _execution_workflow_name(item: dict[str, Any]) -> str:
+    workflow = item.get("workflowData") or {}
+    if isinstance(workflow, dict):
+        name = str(workflow.get("name") or "").strip()
+        if name:
+            return name
+    return str(item.get("workflowId") or "").strip()
+
+
+def niche_from_n8n_execution(item: dict[str, Any]) -> str:
+    """Best-effort preset/niche label from workflow metadata or payload."""
+    for key in ("preset", "niche", "PRESET", "presetId", "preset_id"):
+        raw = item.get(key)
+        if raw:
+            return str(raw).strip()
+    custom = item.get("customData")
+    if isinstance(custom, dict):
+        for key in ("preset", "niche", "preset_id"):
+            if custom.get(key):
+                return str(custom[key]).strip()
+    data = item.get("data")
+    if isinstance(data, dict):
+        for key in ("preset", "niche"):
+            if data.get(key):
+                return str(data[key]).strip()
+        main = data.get("main")
+        if isinstance(main, list) and main:
+            first = main[0]
+            if isinstance(first, list) and first:
+                node = first[0]
+                if isinstance(node, dict):
+                    json_payload = node.get("json") or node.get("data")
+                    if isinstance(json_payload, dict):
+                        for key in ("preset", "niche", "preset_id"):
+                            if json_payload.get(key):
+                                return str(json_payload[key]).strip()
+    name = _execution_workflow_name(item)
+    scrape_match = re.search(r"scrape[\s_/\-]+([a-z0-9][a-z0-9_\-]*)", name, re.IGNORECASE)
+    if scrape_match:
+        return scrape_match.group(1).replace("-", "_")
+    match = _NICHE_FROM_NAME.search(name)
+    if match:
+        return match.group(1).replace("-", "_")
+    if name:
+        return name
+    return "—"
+
+
+def n8n_execution_matches_preset(item: dict[str, Any], preset_id: str) -> bool:
+    if not preset_id:
+        return True
+    niche = niche_from_n8n_execution(item)
+    if niche == preset_id:
+        return True
+    name = _execution_workflow_name(item)
+    if preset_id in name or preset_id.replace("_", "-") in name:
+        return True
+    return False
+
+
+def _n8n_ts_iso(raw: str) -> str:
+    raw = str(raw or "").strip()
+    if not raw:
+        return ""
+    try:
+        if raw.endswith("Z"):
+            raw = raw[:-1] + "+00:00"
+        from datetime import datetime
+
+        dt = datetime.fromisoformat(raw)
+        if dt.tzinfo is None:
+            from datetime import timezone
+
+            dt = dt.replace(tzinfo=timezone.utc)
+        return dt.isoformat()
+    except ValueError:
+        return raw
+
+
+def _counts_from_n8n_execution(item: dict[str, Any]) -> tuple[int | None, int | None]:
+    scraped: int | None = None
+    pushed: int | None = None
+    for container in (item.get("customData"), item.get("data")):
+        if not isinstance(container, dict):
+            continue
+        for key, target in (
+            ("leads_saved", "scraped"),
+            ("scraped", "scraped"),
+            ("leads_scraped", "scraped"),
+            ("instantly_pushed", "pushed"),
+            ("pushed", "pushed"),
+        ):
+            if container.get(key) is None:
+                continue
+            try:
+                val = int(container[key])
+            except (TypeError, ValueError):
+                continue
+            if target == "scraped":
+                scraped = max(scraped or 0, val)
+            else:
+                pushed = max(pushed or 0, val)
+    return scraped, pushed
+
+
+def execution_to_run_row(item: dict[str, Any]) -> dict[str, Any]:
+    started = _n8n_ts_iso(str(item.get("startedAt") or item.get("createdAt") or ""))
+    stopped = _n8n_ts_iso(str(item.get("stoppedAt") or ""))
+    status = str(item.get("status") or item.get("finished") or "")
+    scraped, pushed = _counts_from_n8n_execution(item)
+    return {
+        "source": "n8n",
+        "preset": niche_from_n8n_execution(item),
+        "workflow": _execution_workflow_name(item),
+        "target": 0,
+        "target_mode": "",
+        "started_at": started,
+        "ended_at": stopped,
+        "status": status,
+        "leads_saved": scraped,
+        "instantly_pushed": pushed,
+        "note": "",
+    }
+
+
 def fetch_recent_executions(*, limit: int = 15) -> tuple[list[dict[str, Any]], str | None]:
     """Return (executions, error_message). Empty list when not configured."""
     api_key = _api_key()
@@ -138,23 +269,6 @@ def fetch_recent_executions(*, limit: int = 15) -> tuple[list[dict[str, Any]], s
 
 
 def executions_to_display_rows(executions: list[dict[str, Any]]) -> list[dict[str, str]]:
-    out: list[dict[str, str]] = []
-    for item in executions:
-        started = str(item.get("startedAt") or item.get("createdAt") or "")
-        stopped = str(item.get("stoppedAt") or "")
-        status = str(item.get("status") or item.get("finished") or "")
-        workflow = item.get("workflowData") or {}
-        name = ""
-        if isinstance(workflow, dict):
-            name = str(workflow.get("name") or "")
-        if not name:
-            name = str(item.get("workflowId") or "—")
-        out.append(
-            {
-                "Workflow": name,
-                "Début": started[:19].replace("T", " ") if started else "—",
-                "Fin": stopped[:19].replace("T", " ") if stopped else "—",
-                "Statut n8n": status,
-            }
-        )
-    return out
+    from bootstrap.scrape_run_history import history_to_dataframe_rows
+
+    return history_to_dataframe_rows([execution_to_run_row(item) for item in executions])

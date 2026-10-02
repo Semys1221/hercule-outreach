@@ -18,6 +18,7 @@ from bootstrap.n8n_read import (
 from bootstrap.scrape_run_history import (
     detect_scrape_running,
     history_to_dataframe_rows,
+    merge_n8n_into_history,
     merge_run_history,
 )
 from bootstrap.vps_control import (
@@ -119,6 +120,14 @@ def _status_and_history_panel(preset_id: str) -> None:
         state=state,
         log_text=log_text,
         cron_events=cron_events,
+    )
+    n8n_executions: list[dict] = []
+    if n8n_configured():
+        n8n_executions, _n8n_err = fetch_recent_executions(limit=20)
+    history = merge_n8n_into_history(
+        history,
+        n8n_executions,
+        preset_id=preset_id,
     )
     table_rows = history_to_dataframe_rows(history)
     if table_rows:
@@ -351,11 +360,26 @@ def _render_scrape_without_preset() -> None:
         )
 
     st.subheader("État & historique")
-    st.info(
-        "**Aucun preset prêt** — pas d'historique scrape.log / checkpoint VPS pour un preset "
-        "donné. Consultez les exécutions n8n ci-dessous."
-    )
-    _render_n8n_executions(expanded=True)
+    table_rows: list[dict[str, str]] = []
+    n8n_err: str | None = None
+    if n8n_configured():
+        executions, n8n_err = fetch_recent_executions(limit=25)
+        if executions:
+            history = merge_n8n_into_history([], executions, preset_id=None)
+            table_rows = history_to_dataframe_rows(history)
+    if table_rows:
+        st.caption(
+            "Historique agrégé depuis **n8n** (aucun preset onboarding prêt pour scrape.log VPS)."
+        )
+        st.dataframe(pd.DataFrame(table_rows), use_container_width=True, hide_index=True)
+    else:
+        st.info(
+            "**Aucun preset prêt** — pas d'historique scrape.log / checkpoint VPS. "
+            "Configurez n8n ou terminez l'onboarding pour voir les runs."
+        )
+        if n8n_err:
+            st.warning(f"n8n — {n8n_err}")
+    _render_n8n_executions(expanded=not table_rows)
 
     if vps_configured():
         if st.button("Actualiser", key="scrape_refresh_no_preset"):
