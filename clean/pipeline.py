@@ -42,13 +42,13 @@ class PipelineResult:
     push_pushed: int
     push_batches: int
     push_skipped_duplicate: int
+    purged_count: int
+    email_column: str
+    run_mode: str
     mark_attempted: int = 0
     mark_patched: int = 0
     mark_failed: int = 0
     mark_skipped_no_lead: int = 0
-    purged_count: int
-    email_column: str
-    run_mode: str
     artifact_paths: dict[str, str] = field(default_factory=dict)
     quick_stats: dict[str, int] = field(default_factory=dict)
     status_counts: dict[str, int] = field(default_factory=dict)
