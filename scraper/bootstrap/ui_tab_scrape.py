@@ -20,11 +20,15 @@ from bootstrap.scrape_run_history import (
     merge_run_history,
 )
 from bootstrap.ui_helpers import (
+    SCRAPE_RUN_CONTEXT_KEY,
+    clear_scrape_last_launch,
     clear_scrape_run_context,
     load_adhoc_scrape_form_defaults,
     merge_scrape_run_display,
+    render_scrape_last_launch_feedback,
     render_scrape_run_context_banner,
     select_instantly_lead_list,
+    store_scrape_last_launch,
     store_scrape_run_context,
 )
 from bootstrap.vps_control import (
@@ -32,7 +36,7 @@ from bootstrap.vps_control import (
     format_vps_connection_warning,
     load_panel_state,
     n8n_scrape_webhook_configured,
-    resolve_scrape_default_preset_id,
+    resolve_scrape_launch_preset,
     resolve_scrape_tracking_preset_id,
     trigger_n8n_scrape,
     vps_configured,
@@ -61,7 +65,7 @@ def _live_progress_and_history_panel(tracking_preset_id: str) -> None:
     if state is None:
         state = load_scrape_state(paths.scrape_state)
 
-    vps = worker_status() if vps_configured() else None
+    vps = worker_status(preset_id=tracking_preset_id) if vps_configured() else None
     running, _code, running_label = detect_scrape_running(
         tracking_preset_id,
         state=state,
@@ -164,6 +168,7 @@ def _render_n8n_executions(*, expanded: bool = False) -> None:
 
 def _render_launch_controls() -> None:
     st.subheader("Lancer un scrape")
+    render_scrape_last_launch_feedback()
 
     n8n_ready = n8n_scrape_webhook_configured()
     if n8n_ready:
@@ -218,25 +223,26 @@ def _render_launch_controls() -> None:
 
     if n8n_btn:
         list_id = str(selected_list["id"]) if selected_list else ""
+        launch_preset = resolve_scrape_launch_preset(instantly_list_id=list_id)
         ok, message = trigger_n8n_scrape(
             keyword=keyword,
             instantly_list_id=list_id,
             target_leads=int(target_leads),
+            preset_id=launch_preset,
         )
+        store_scrape_last_launch(ok=ok, message=message)
         if ok:
             store_scrape_run_context(
-                resolve_scrape_tracking_preset_id(),
+                launch_preset,
                 keyword=keyword,
                 instantly_list_id=list_id,
                 instantly_list_name=str(selected_list.get("name", "")) if selected_list else "",
                 target_leads=int(target_leads),
             )
-            st.success(message)
-        else:
-            st.error(message)
         st.rerun()
 
     if refresh_btn:
+        clear_scrape_last_launch()
         st.rerun()
 
 
@@ -259,5 +265,13 @@ def render_scrape_tab() -> None:
         )
 
     _render_launch_controls()
-    tracking_preset = resolve_scrape_tracking_preset_id()
+    session_ctx = st.session_state.get(SCRAPE_RUN_CONTEXT_KEY)
+    preferred = (
+        str(session_ctx.get("preset_id") or "").strip()
+        if isinstance(session_ctx, dict)
+        else ""
+    )
+    tracking_preset = resolve_scrape_tracking_preset_id(
+        preferred_preset_id=preferred or None,
+    )
     _live_progress_and_history_panel(tracking_preset)

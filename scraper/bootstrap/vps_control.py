@@ -64,14 +64,56 @@ def resolve_scrape_default_preset_id() -> str:
     return "_adhoc"
 
 
-def resolve_scrape_tracking_preset_id() -> str:
+def worker_service_name(preset_id: str) -> str:
+    """systemd unit for a scraper preset (matches VPS drop-in naming)."""
+    pid = preset_id.strip() or resolve_scrape_default_preset_id()
+    return f"hercule-scraper-{pid}"
+
+
+def resolve_scrape_launch_preset(
+    *,
+    instantly_list_id: str,
+    preset_id: str | None = None,
+) -> str:
+    """Preset passed to n8n heal — explicit arg, Instantly list map, then env default."""
+    explicit = (preset_id or "").strip()
+    if explicit:
+        return explicit
+    from bootstrap.discovery import preset_for_instantly_list_id
+
+    mapped = preset_for_instantly_list_id(instantly_list_id)
+    if mapped:
+        return mapped
+    return resolve_scrape_default_preset_id()
+
+
+def resolve_scrape_tracking_preset_id(
+    *,
+    preferred_preset_id: str | None = None,
+) -> str:
     """Preset directory to read for Suivi en cours (heartbeat overrides default)."""
-    default = resolve_scrape_default_preset_id()
+    preferred = (preferred_preset_id or "").strip()
+    default = preferred or resolve_scrape_default_preset_id()
     if not vps_configured():
         return default
     _, _, _, heartbeat, _ = load_panel_state(default, max_log_lines=1, max_cron_lines=1)
     hb_preset = str((heartbeat or {}).get("preset") or "").strip()
-    return hb_preset or default
+    if hb_preset:
+        return hb_preset
+    if preferred:
+        return preferred
+    if default != "_adhoc":
+        return default
+    from bootstrap.discovery import discover_presets
+
+    for preset_id in discover_presets(use_cache=True):
+        if preset_id == "_adhoc":
+            continue
+        _, _, _, hb, _ = load_panel_state(preset_id, max_log_lines=1, max_cron_lines=1)
+        hb_status = str((hb or {}).get("status") or "").strip()
+        if hb_status in ("running", "blocked"):
+            return preset_id
+    return default
 
 
 def vps_ssh_key_configured(cfg: VpsConfig | None = None) -> bool:
@@ -223,10 +265,15 @@ def _ssh_fetch_files(
         return empty
 
 
-def worker_status(cfg: VpsConfig | None = None) -> dict[str, Any]:
+def worker_status(
+    cfg: VpsConfig | None = None,
+    *,
+    preset_id: str | None = None,
+) -> dict[str, Any]:
     cfg = cfg or VpsConfig.from_env()
     if not cfg:
         return {"configured": False, "active": False, "reachable": True, "detail": "VPS not configured"}
+    service_name = worker_service_name(preset_id) if preset_id else cfg.service_name
     if _ssh_in_backoff():
         return {
             "configured": True,
@@ -234,9 +281,9 @@ def worker_status(cfg: VpsConfig | None = None) -> dict[str, Any]:
             "reachable": False,
             "detail": _ssh_last_error or "SSH unavailable (retrying shortly)",
             "host": cfg.host,
-            "service": cfg.service_name,
+            "service": service_name,
         }
-    cmd = f"systemctl is-active {shlex.quote(cfg.service_name)}"
+    cmd = f"systemctl is-active {shlex.quote(service_name)}"
     code, out, err = _ssh_exec(cfg, cmd, timeout=30)
     active = out.strip() == "active"
     reachable = code == 0 or bool(out.strip())
@@ -247,7 +294,7 @@ def worker_status(cfg: VpsConfig | None = None) -> dict[str, Any]:
         "reachable": reachable,
         "detail": detail,
         "host": cfg.host,
-        "service": cfg.service_name,
+        "service": service_name,
     }
 
 
@@ -388,6 +435,10 @@ def trigger_n8n_scrape(
             False,
             "Définissez `N8N_SCRAPE_WEBHOOK_URL` dans le `.env` pour lancer un scrape via n8n.",
         )
+    launch_preset = resolve_scrape_launch_preset(
+        instantly_list_id=instantly_list_id,
+        preset_id=preset_id,
+    )
     try:
         import httpx
 
@@ -395,16 +446,15 @@ def trigger_n8n_scrape(
             "keyword": keyword.strip(),
             "instantly_list_id": instantly_list_id.strip(),
             "target_leads": int(target_leads),
+            "preset_id": launch_preset,
+            "preset": launch_preset,
         }
-        if preset_id and preset_id.strip():
-            payload["preset_id"] = preset_id.strip()
-            payload["preset"] = preset_id.strip()
         with httpx.Client(timeout=30.0) as client:
             response = client.post(url, json=payload)
         if response.status_code >= 400:
             body = response.text.strip()[:500]
             return False, f"n8n webhook HTTP {response.status_code}: {body or 'empty body'}"
-        return True, "Scrape déclenché via n8n."
+        return True, f"Scrape déclenché via n8n (preset `{launch_preset}`)."
     except Exception as exc:
         return False, f"n8n webhook failed: {exc}"
 

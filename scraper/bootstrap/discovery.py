@@ -130,6 +130,35 @@ def all_dedup_list_ids(preset_id: str, *, use_cache: bool = True) -> list[str]:
     return [list_id] if list_id else []
 
 
+def instantly_list_ids_for_preset(preset_id: str, *, use_cache: bool = True) -> list[str]:
+    """Primary Instantly list + INSTANTLY_DEDUP_LIST_IDS for a preset."""
+    presets = discover_presets(use_cache=use_cache)
+    meta = presets.get(preset_id)
+    if meta is None:
+        return []
+    config = meta.loader()
+    seen: set[str] = set()
+    ordered: list[str] = []
+    for raw in (config.get("INSTANTLY_LIST_ID"), *(config.get("INSTANTLY_DEDUP_LIST_IDS") or [])):
+        lid = _uuid(raw)
+        if lid and lid not in seen:
+            seen.add(lid)
+            ordered.append(lid)
+    return ordered
+
+
+def preset_for_instantly_list_id(list_id: str, *, use_cache: bool = True) -> str | None:
+    """Map an Instantly list UUID to the scraper preset that owns it."""
+    needle = _uuid(list_id).lower()
+    if not needle:
+        return None
+    for preset_id, meta in discover_presets(use_cache=use_cache).items():
+        for candidate in instantly_list_ids_for_preset(preset_id, use_cache=use_cache):
+            if candidate.lower() == needle:
+                return preset_id
+    return None
+
+
 def all_dedup_campaign_ids(preset_id: str, *, use_cache: bool = True) -> list[str]:
     presets = discover_presets(use_cache=use_cache)
     meta = presets.get(preset_id)

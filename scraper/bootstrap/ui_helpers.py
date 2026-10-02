@@ -134,6 +134,33 @@ def load_scrape_form_defaults(preset_id: str) -> tuple[str, int, str | None]:
 
 
 SCRAPE_RUN_CONTEXT_KEY = "scrape_run_context"
+SCRAPE_LAST_LAUNCH_KEY = "scrape_last_launch"
+
+
+def store_scrape_last_launch(*, ok: bool, message: str) -> None:
+    st.session_state[SCRAPE_LAST_LAUNCH_KEY] = {
+        "ok": bool(ok),
+        "message": (message or "").strip(),
+    }
+
+
+def clear_scrape_last_launch() -> None:
+    st.session_state.pop(SCRAPE_LAST_LAUNCH_KEY, None)
+
+
+def render_scrape_last_launch_feedback() -> None:
+    raw = st.session_state.get(SCRAPE_LAST_LAUNCH_KEY)
+    if not isinstance(raw, dict):
+        return
+    ok = bool(raw.get("ok"))
+    message = str(raw.get("message") or "").strip()
+    if not message:
+        return
+    if ok:
+        st.success(message)
+        st.toast(message, icon="✅")
+    else:
+        st.error(message)
 
 
 def store_scrape_run_context(
