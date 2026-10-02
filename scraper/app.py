@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import config_loader  # noqa: F401 — repo .env before any bootstrap / VPS imports
+
 import streamlit as st
 
 from bootstrap.ui_common import init_session_state

@@ -15,8 +15,9 @@ _LIB_DIR = os.path.dirname(os.path.abspath(__file__))
 _REPO_ENV = str(outreach_root() / ".env")
 _LOCAL_ENV = os.path.join(_LIB_DIR, ".env")
 
+# override=True: repo .env wins over stale VPS_* (etc.) exported in the shell/Streamlit parent.
 if os.path.isfile(_REPO_ENV):
-    load_dotenv(_REPO_ENV)
+    load_dotenv(_REPO_ENV, override=True)
 if os.path.isfile(_LOCAL_ENV):
     load_dotenv(_LOCAL_ENV, override=True)
 load_dotenv()
