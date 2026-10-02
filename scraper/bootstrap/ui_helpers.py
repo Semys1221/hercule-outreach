@@ -154,6 +154,10 @@ def store_scrape_run_context(
     }
 
 
+def clear_scrape_run_context() -> None:
+    st.session_state.pop(SCRAPE_RUN_CONTEXT_KEY, None)
+
+
 def resolve_instantly_list_name(list_id: str) -> str:
     list_id = list_id.strip()
     if not list_id:

@@ -7,6 +7,7 @@ import os
 import shlex
 import time
 from dataclasses import dataclass
+from datetime import datetime, timezone
 from typing import Any
 
 import config_loader  # noqa: F401 — loads repo .env via outreach_root()
@@ -259,6 +260,118 @@ def stop_worker(*, cfg: VpsConfig | None = None) -> tuple[bool, str]:
     if code == 0:
         return True, "Worker stopped on VPS."
     return False, err.strip() or out.strip() or f"systemctl failed ({code})"
+
+
+def _utc_now_iso() -> str:
+    return datetime.now(timezone.utc).replace(microsecond=0).isoformat()
+
+
+def _write_json_dict(path: str, data: dict[str, Any]) -> None:
+    directory = os.path.dirname(path)
+    if directory:
+        os.makedirs(directory, exist_ok=True)
+    payload = json.dumps(data, ensure_ascii=False, indent=2) + "\n"
+    with open(path, "w", encoding="utf-8") as handle:
+        handle.write(payload)
+
+
+def _ssh_write_text(cfg: VpsConfig, remote_path: str, content: str) -> tuple[bool, str]:
+    if _ssh_in_backoff():
+        return False, _ssh_last_error or "SSH indisponible (nouvel essai sous peu)."
+
+    try:
+        client = _connect_ssh(cfg)
+        try:
+            tmp_path = f"{remote_path}.ui-write.tmp"
+            sftp = client.open_sftp()
+            try:
+                with sftp.file(tmp_path, "w") as remote_file:
+                    remote_file.write(content.encode("utf-8"))
+                sftp.rename(tmp_path, remote_path)
+            finally:
+                sftp.close()
+            _clear_ssh_failure()
+            return True, ""
+        finally:
+            client.close()
+    except Exception as exc:
+        message = f"SSH write failed: {exc}"
+        _mark_ssh_failure(message)
+        return False, message
+
+
+def _persist_json_artifact(
+    *,
+    preset: str,
+    filename: str,
+    current: dict[str, Any] | None,
+    updates: dict[str, Any],
+    cfg: VpsConfig | None,
+) -> tuple[bool, str]:
+    merged = dict(current or {})
+    merged.update(updates)
+    payload = json.dumps(merged, ensure_ascii=False, indent=2) + "\n"
+    if cfg:
+        out_dir = remote_preset_out_dir(preset, cfg)
+        remote_path = os.path.join(out_dir, filename)
+        return _ssh_write_text(cfg, remote_path, payload)
+    from paths import output_paths
+
+    local_path = os.path.join(output_paths(preset).out_dir, filename)
+    try:
+        _write_json_dict(local_path, merged)
+    except OSError as exc:
+        return False, str(exc)
+    return True, ""
+
+
+def archive_active_scrape(preset_id: str | None = None) -> tuple[bool, str]:
+    """Mark scrape as archived on disk, stop VPS worker, clear active-run semantics in UI."""
+    from scrape_state import STATUS_ARCHIVED
+
+    preset = (preset_id or "").strip() or resolve_scrape_tracking_preset_id()
+    cfg = VpsConfig.from_env()
+    state, _, out_dir, heartbeat, _ = load_panel_state(preset, max_log_lines=1, max_cron_lines=1)
+    now = _utc_now_iso()
+    state_updates = {
+        "status": STATUS_ARCHIVED,
+        "archived_at": now,
+        "last_updated": now,
+        "preset": preset,
+    }
+    hb_updates = {
+        "status": STATUS_ARCHIVED,
+        "last_seen": now,
+        "preset": preset,
+    }
+
+    ok_state, err_state = _persist_json_artifact(
+        preset=preset,
+        filename="scrape_state.json",
+        current=state,
+        updates=state_updates,
+        cfg=cfg,
+    )
+    if not ok_state:
+        return False, f"Impossible de mettre à jour scrape_state — {err_state}"
+
+    ok_hb, err_hb = _persist_json_artifact(
+        preset=preset,
+        filename="worker_heartbeat.json",
+        current=heartbeat,
+        updates=hb_updates,
+        cfg=cfg,
+    )
+    if not ok_hb:
+        return False, f"Impossible de mettre à jour le heartbeat — {err_hb}"
+
+    stop_detail = ""
+    if cfg:
+        stopped, stop_msg = stop_worker(cfg=cfg)
+        if not stopped:
+            stop_detail = f" ({stop_msg})"
+
+    return True, f"Scrape archivé — plus d'exécution active affichée.{stop_detail}"
 
 
 def trigger_n8n_scrape(

@@ -20,6 +20,7 @@ from bootstrap.scrape_run_history import (
     merge_run_history,
 )
 from bootstrap.ui_helpers import (
+    clear_scrape_run_context,
     load_adhoc_scrape_form_defaults,
     merge_scrape_run_display,
     render_scrape_run_context_banner,
@@ -27,12 +28,12 @@ from bootstrap.ui_helpers import (
     store_scrape_run_context,
 )
 from bootstrap.vps_control import (
+    archive_active_scrape,
     format_vps_connection_warning,
     load_panel_state,
     n8n_scrape_webhook_configured,
     resolve_scrape_default_preset_id,
     resolve_scrape_tracking_preset_id,
-    stop_worker,
     trigger_n8n_scrape,
     vps_configured,
     worker_status,
@@ -82,6 +83,15 @@ def _live_progress_and_history_panel(tracking_preset_id: str) -> None:
 
     if running:
         st.success(f"**Scrape en cours** — {running_label}")
+        if st.button("Archiver le scrape", key="scrape_archive_active"):
+            ok, message = archive_active_scrape(tracking_preset_id)
+            clear_scrape_run_context()
+            if ok:
+                st.toast(message, icon="✅")
+                st.success(message)
+            else:
+                st.warning(message)
+            st.rerun()
     elif at_target:
         st.info(f"**Objectif atteint** — {progress}/{target}")
     else:
@@ -197,19 +207,14 @@ def _render_launch_controls() -> None:
     if missing_list and n8n_ready:
         st.caption("Sélectionnez une liste Instantly.")
 
-    ctrl1, ctrl2, ctrl3 = st.columns(3)
+    ctrl1, ctrl2 = st.columns(2)
     n8n_btn = ctrl1.button(
         "Lancer le scrape",
         type="primary",
         disabled=disabled_launch,
         key="scrape_trigger_n8n",
     )
-    pause_btn = ctrl2.button(
-        "Arrêter worker VPS",
-        disabled=not vps_configured(),
-        key="scrape_pause_worker",
-    )
-    refresh_btn = ctrl3.button("Actualiser", key="scrape_refresh")
+    refresh_btn = ctrl2.button("Actualiser", key="scrape_refresh")
 
     if n8n_btn:
         list_id = str(selected_list["id"]) if selected_list else ""
@@ -229,14 +234,6 @@ def _render_launch_controls() -> None:
             st.success(message)
         else:
             st.error(message)
-        st.rerun()
-
-    if pause_btn:
-        ok, message = stop_worker()
-        if ok:
-            st.success(message)
-        else:
-            st.warning(message)
         st.rerun()
 
     if refresh_btn:

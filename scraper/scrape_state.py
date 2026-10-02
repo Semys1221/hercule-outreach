@@ -9,6 +9,7 @@ from typing import Any
 STATUS_RUNNING = "running"
 STATUS_COMPLETED = "completed"
 STATUS_INCOMPLETE = "incomplete"
+STATUS_ARCHIVED = "archived"
 
 CHECKPOINT_PUSH_MODES = frozenset({"instantly_pushed", "instantly_pushed_run"})
 LIVE_LIST_TARGET_MODES = frozenset({"instantly_pushed"})

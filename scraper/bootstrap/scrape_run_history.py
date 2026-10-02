@@ -7,7 +7,12 @@ from datetime import datetime, timezone
 from typing import Any
 
 from scrape_metrics import heartbeat_age_seconds
-from scrape_state import STATUS_COMPLETED, STATUS_INCOMPLETE, STATUS_RUNNING
+from scrape_state import (
+    STATUS_ARCHIVED,
+    STATUS_COMPLETED,
+    STATUS_INCOMPLETE,
+    STATUS_RUNNING,
+)
 
 _LOG_TS = re.compile(r"^\[([^\]]+)\]")
 _RUN_START = re.compile(
@@ -44,6 +49,7 @@ def _status_label_fr(code: str) -> str:
         "blocked": "Bloqué",
         "stalled": "En pause (heartbeat)",
         "idle": "Inactif",
+        "archived": "Archivé",
         "heal_start": "Relance (heal)",
         "heal_restart": "Redémarrage (heal)",
         "noop_at_target": "Objectif atteint",
@@ -162,7 +168,9 @@ def _state_run_row(state: dict[str, Any], preset_id: str) -> dict[str, Any]:
         "target": int(state.get("target", 0) or 0),
         "target_mode": str(state.get("target_mode") or ""),
         "started_at": str(state.get("started_at") or ""),
-        "ended_at": str(state.get("last_updated") or "") if status != STATUS_RUNNING else "",
+        "ended_at": str(state.get("last_updated") or state.get("archived_at") or "")
+        if status not in (STATUS_RUNNING,)
+        else "",
         "status": status,
         "leads_saved": int(state.get("leads_saved", 0) or 0),
         "leads_enriched_valid": int(state.get("leads_enriched_valid", 0) or 0),
@@ -335,6 +343,9 @@ def detect_scrape_running(
     hb_status = str((heartbeat or {}).get("status") or "").strip()
     vps_active = bool(vps and vps.get("active"))
     state_status = str((state or {}).get("status") or "")
+
+    if state_status == STATUS_ARCHIVED or hb_status == STATUS_ARCHIVED:
+        return False, STATUS_ARCHIVED, _status_label_fr(STATUS_ARCHIVED)
 
     if vps_active:
         if hb_preset and hb_preset != preset_id:
