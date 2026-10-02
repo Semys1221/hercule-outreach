@@ -20,7 +20,8 @@ from checkpoint import (
 from paths import data_dir
 from quick_verifier import quick_verify_dataframe
 
-from instantly_client import push_leads_to_campaign, purge_leads_from_list
+from instantly_client import get_api_key, push_leads_to_campaign, purge_leads_from_list
+from instantly_mark_cleaned import mark_cleaned_leads_in_instantly
 
 RUN_MODE_DRY = "dry_run"
 RUN_MODE_TEST_50 = "test_50"
@@ -41,6 +42,10 @@ class PipelineResult:
     push_pushed: int
     push_batches: int
     push_skipped_duplicate: int
+    mark_attempted: int = 0
+    mark_patched: int = 0
+    mark_failed: int = 0
+    mark_skipped_no_lead: int = 0
     purged_count: int
     email_column: str
     run_mode: str
@@ -293,6 +298,22 @@ def run_cleaning_pipeline(
             pass
         # #endregion
 
+    mark_stats = {
+        "attempted": 0,
+        "patched": 0,
+        "failed": 0,
+        "skipped_no_lead": 0,
+    }
+    if not is_dry and not final_clean_df.empty and get_api_key():
+        if on_progress:
+            on_progress("Marking cleaned leads on Instantly...", 0.92)
+        mark_stats = mark_cleaned_leads_in_instantly(
+            final_clean_df,
+            campaign_id=destination_campaign_id,
+            email_column=email_col,
+            on_progress=on_progress,
+        )
+
     if on_progress:
         on_progress("Pipeline complete.", 1.0)
 
@@ -318,6 +339,10 @@ def run_cleaning_pipeline(
         push_pushed=push_stats["pushed"],
         push_batches=push_stats["batches"],
         push_skipped_duplicate=push_stats.get("skipped_duplicate", 0),
+        mark_attempted=mark_stats["attempted"],
+        mark_patched=mark_stats["patched"],
+        mark_failed=mark_stats["failed"],
+        mark_skipped_no_lead=mark_stats["skipped_no_lead"],
         purged_count=purged_count,
         email_column=email_col,
         run_mode=run_mode,

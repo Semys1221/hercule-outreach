@@ -1106,9 +1106,20 @@ def _row_to_bulk_lead(row: pd.Series) -> dict[str, Any]:
         except json.JSONDecodeError:
             custom_variables = {}
     if isinstance(custom_variables, dict) and custom_variables:
-        lead["custom_variables"] = {
-            str(k): v for k, v in custom_variables.items() if v is not None
-        }
+        coerced: dict[str, str | int | float | bool] = {}
+        for key, value in custom_variables.items():
+            if value is None or (isinstance(value, float) and pd.isna(value)):
+                continue
+            if isinstance(value, (dict, list)):
+                continue
+            if isinstance(value, (str, int, float, bool)):
+                coerced[str(key)] = value
+            else:
+                text = str(value).strip()
+                if text:
+                    coerced[str(key)] = text
+        if coerced:
+            lead["custom_variables"] = coerced
 
     return lead
 

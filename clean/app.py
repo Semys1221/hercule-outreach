@@ -133,6 +133,13 @@ def _render_validation_screen(result, *, show_push: bool) -> None:
                 f"(already in workspace)."
             )
 
+    if show_push and result.mark_attempted:
+        st.info(
+            f"Marked {result.mark_patched} lead(s) with Instantly custom variable "
+            f"`cleaned=valid` ({result.mark_failed} failed, "
+            f"{result.mark_skipped_no_lead} without resolvable lead id)."
+        )
+
     if result.purged_count:
         st.warning(
             f"Purged {result.purged_count} lead(s) from the source Instantly list "
