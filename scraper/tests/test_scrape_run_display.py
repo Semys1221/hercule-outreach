@@ -47,17 +47,17 @@ def test_merge_state_metadata_when_session_missing_fields() -> None:
     assert display["target_leads"] == 1500
 
 
-def test_merge_ignores_session_for_other_preset() -> None:
+def test_merge_session_overlays_vps_state() -> None:
     display = merge_scrape_run_display(
         "avocats",
-        state={"keyword": "vps-only"},
+        state={"keyword": "vps-only", "instantly_list_id": "old"},
         config=None,
         session_ctx={
             "preset_id": "_adhoc",
             "keyword": "adhoc-session",
-            "instantly_list_id": "x",
+            "instantly_list_id": "new-list",
             "target_leads": 100,
         },
     )
-    assert display["keyword"] == "vps-only"
-    assert display["instantly_list_id"] == ""
+    assert display["keyword"] == "adhoc-session"
+    assert display["instantly_list_id"] == "new-list"

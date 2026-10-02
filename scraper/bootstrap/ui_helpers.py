@@ -196,13 +196,7 @@ def merge_scrape_run_display(
     if ctx is None:
         raw = st.session_state.get(SCRAPE_RUN_CONTEXT_KEY)
         ctx = raw if isinstance(raw, dict) else {}
-    session_ctx = ctx
-    if (
-        session_ctx.get("preset_id")
-        and preset_id
-        and session_ctx.get("preset_id") != preset_id
-    ):
-        session_ctx = {}
+    session_ctx = ctx if isinstance(ctx, dict) else {}
 
     keyword = ""
     list_id = ""
