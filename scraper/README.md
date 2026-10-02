@@ -54,6 +54,9 @@ Optional VPS remote control (Scrape page):
 | `VPS_REPO_ROOT` | Repo path on VPS (default `/root/hercule.dev`) |
 | `HERCULE_DATA_ROOT` | Persistent data dir (default `/var/lib/hercule`) |
 | `VPS_SCRAPER_SERVICE` | systemd unit name (default `hercule-scraper`) |
+| `N8N_BASE_URL` / `N8N_API_KEY` | Optional read-only n8n execution list on Scrape page |
+| `N8N_VIA_VPS` | When `1` (default), call n8n on the VPS via SSH if `N8N_BASE_URL` is unset |
+| `N8N_VPS_LOCAL_URL` | Override VPS-local n8n URL for SSH curl (default `http://127.0.0.1:5678`) |
 
 ## Onboarding (Streamlit UI)
 
@@ -78,7 +81,8 @@ Technical defaults (Outscraper batch, SIRENE, target 5 000) come from [`configs/
 
 - Own preset dropdown — lists only presets with **completed onboarding** (tabs 1–6)
 - If no preset is ready, the page stays open with an info message
-- **Contrôles** bar at top: **Démarrer / Continuer**, **Pause**, **Actualiser** (worker start/stop via SSH/systemd or local)
+- **État & historique** — scrape en cours, table depuis `scrape_state.json`, `scrape.log`, `cron_events.jsonl` (VPS SSH)
+- **Contrôles VPS** — démarrer / arrêter le worker systemd (pas de worker local)
 - Live metrics panel auto-refreshes every 5s
 - Read-only config summary (collapsed by default)
 - **Push CSV to Instantly** and **Wipe local** in secondary sections

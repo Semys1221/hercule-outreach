@@ -62,6 +62,10 @@ def scrape_preset_selector() -> str:
         st.info(
             "Aucun preset prêt. Terminez l'onboarding (onglets 1 à 6) pour activer le scraping."
         )
+        st.caption(
+            "L'historique **n8n** et le statut VPS restent visibles ci-dessous "
+            "(orchestration scrape sur le VPS)."
+        )
         st.session_state.scrape_preset_id = ""
         return ""
 

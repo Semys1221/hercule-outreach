@@ -10,6 +10,16 @@ import pandas as pd
 import streamlit as st
 
 from bootstrap.discovery import discover_presets
+from bootstrap.n8n_read import (
+    executions_to_display_rows,
+    fetch_recent_executions,
+    n8n_configured,
+)
+from bootstrap.scrape_run_history import (
+    detect_scrape_running,
+    history_to_dataframe_rows,
+    merge_run_history,
+)
 from bootstrap.vps_control import (
     load_panel_state,
     remote_csv_lead_count,
@@ -20,7 +30,6 @@ from bootstrap.vps_control import (
 )
 from config_loader import load_config
 from core_logic import clear_local_leads, output_paths
-from instantly_client import csv_push_stats, push_csv_to_instantly
 from scrape_metrics import fetch_instantly_live, heartbeat_age_seconds
 from scrape_state import (
     detect_recoverable_run,
@@ -55,12 +64,12 @@ def _format_age(seconds: float | None) -> str:
 def _worker_state_label(heartbeat: dict | None, vps_active: bool) -> str:
     age = heartbeat_age_seconds(heartbeat)
     if vps_active:
-        return "Running on VPS"
+        return "Worker VPS actif"
     if age is not None and age < 900:
-        return "Worker active"
+        return "Heartbeat actif"
     if age is not None:
-        return "Stalled"
-    return "Idle"
+        return "En pause (heartbeat expiré)"
+    return "Inactif"
 
 
 def _parse_log_totals(log_text: str) -> tuple[int | None, int | None]:
@@ -82,6 +91,67 @@ def _parse_log_totals(log_text: str) -> tuple[int | None, int | None]:
             rejected = int(match.group(2))
             break
     return enriched, rejected
+
+
+@st.fragment(run_every=15)
+def _status_and_history_panel(preset_id: str) -> None:
+    state, log_text, _, heartbeat, cron_events = load_panel_state(
+        preset_id,
+        max_log_lines=400,
+        max_cron_lines=40,
+    )
+    vps = worker_status() if vps_configured() else None
+    running, _code, running_label = detect_scrape_running(
+        preset_id,
+        state=state,
+        heartbeat=heartbeat,
+        vps=vps,
+    )
+
+    st.subheader("État & historique")
+    if running:
+        st.success(f"**Scrape en cours** — {running_label}")
+    else:
+        st.info(f"**Aucun scrape en cours** — {running_label}")
+
+    history = merge_run_history(
+        preset_id,
+        state=state,
+        log_text=log_text,
+        cron_events=cron_events,
+    )
+    table_rows = history_to_dataframe_rows(history)
+    if table_rows:
+        st.dataframe(pd.DataFrame(table_rows), use_container_width=True, hide_index=True)
+    else:
+        st.caption(
+            "Aucune exécution enregistrée pour ce preset "
+            "(scrape.log / scrape_state.json sur le VPS)."
+        )
+
+    _render_n8n_executions(expanded=not table_rows)
+
+
+def _render_n8n_executions(*, expanded: bool = False) -> None:
+    if not n8n_configured():
+        st.caption(
+            "Historique n8n — définissez `N8N_API_KEY` et `N8N_BASE_URL` "
+            "(ou `VPS_HOST` / `VPS_USER` pour lire n8n sur le VPS via SSH)."
+        )
+        return
+
+    executions, err = fetch_recent_executions(limit=12)
+    if err:
+        st.warning(f"n8n — {err}")
+    elif not executions:
+        st.caption("n8n — aucune exécution récente.")
+    else:
+        with st.expander("Exécutions n8n (lecture seule)", expanded=expanded):
+            st.dataframe(
+                pd.DataFrame(executions_to_display_rows(executions)),
+                use_container_width=True,
+                hide_index=True,
+            )
 
 
 @st.fragment(run_every=5)
@@ -122,14 +192,17 @@ def _live_panel(
     vps = worker_status()
     status_label = _worker_state_label(heartbeat, bool(vps.get("active")))
 
-    if status_label == "Stalled":
-        st.error(f"Worker stalled — last heartbeat {_format_age(heartbeat_age_seconds(heartbeat))}")
-    elif status_label == "Running on VPS":
-        st.success(f"VPS worker active ({vps.get('host', '')})")
-    elif status_label == "Worker active":
-        st.info(f"Worker heartbeat {_format_age(heartbeat_age_seconds(heartbeat))}")
+    if status_label == "En pause (heartbeat expiré)":
+        st.error(
+            f"Worker en pause — dernier heartbeat "
+            f"{_format_age(heartbeat_age_seconds(heartbeat))}"
+        )
+    elif status_label == "Worker VPS actif":
+        st.success(f"Worker VPS actif ({vps.get('host', '')})")
+    elif status_label == "Heartbeat actif":
+        st.info(f"Heartbeat {_format_age(heartbeat_age_seconds(heartbeat))}")
 
-    st.progress(progress, text=f"Progress {headline:,} / {target:,} ({mode})")
+    st.progress(progress, text=f"Progrès {headline:,} / {target:,} ({mode})")
 
     c1, c2, c3, c4 = st.columns(4)
     c1.metric("Instantly (live)", f"{instantly_live:,}" if instantly_live is not None else "—")
@@ -210,21 +283,34 @@ def _render_worker_controls(
     has_instantly: bool,
     vps: dict[str, Any] | None = None,
 ) -> None:
+    if not vps_configured():
+        st.caption(
+            "Les scrapes s'exécutent **uniquement sur le VPS** (worker systemd, "
+            "déclenché via n8n). Configurez `VPS_HOST` et `VPS_USER` dans `.env` "
+            "pour suivre l'état à distance — pas de worker local."
+        )
+        if st.button("Actualiser", key="scrape_refresh"):
+            st.rerun()
+        return
+
     _, _, _, heartbeat, _ = load_panel_state(preset_id)
     vps = vps or worker_status()
     status_label = _worker_state_label(heartbeat, bool(vps.get("active")))
 
-    st.subheader("Contrôles")
-    st.caption(f"État worker : **{status_label}**")
+    st.subheader("Contrôles VPS")
+    st.caption(
+        f"État worker : **{status_label}**. "
+        "Les runs sont orchestrés sur le VPS (n8n → systemd) — pas d'exécution locale."
+    )
 
     ctrl1, ctrl2, ctrl3 = st.columns(3)
     continue_btn = ctrl1.button(
-        "Démarrer / Continuer",
+        "Démarrer worker VPS",
         type="primary",
         disabled=at_target or (is_instantly_push_mode(mode) and not has_instantly),
         key="scrape_continue_worker",
     )
-    pause_btn = ctrl2.button("Pause", key="scrape_pause_worker")
+    pause_btn = ctrl2.button("Arrêter worker VPS", key="scrape_pause_worker")
     refresh_btn = ctrl3.button("Actualiser", key="scrape_refresh")
 
     if continue_btn:
@@ -247,10 +333,40 @@ def _render_worker_controls(
         st.rerun()
 
 
+def _render_scrape_without_preset() -> None:
+    st.caption(
+        "Les contrôles worker, métriques live et historique **par preset** "
+        "apparaissent une fois l'onboarding terminé (onglets 1 à 6)."
+    )
+    vps_probe = worker_status() if vps_configured() else None
+    if not vps_configured():
+        st.info(
+            "Scraping **VPS uniquement** (n8n + worker systemd). "
+            "Ajoutez `VPS_HOST` / `VPS_USER` pour lire l'historique scrape à distance."
+        )
+    elif vps_probe and not vps_probe.get("reachable", True):
+        st.warning(
+            "Connexion VPS impossible — "
+            f"{vps_probe.get('detail', 'vérifiez VPS_HOST, le réseau et les clés SSH')}."
+        )
+
+    st.subheader("État & historique")
+    st.info(
+        "**Aucun preset prêt** — pas d'historique scrape.log / checkpoint VPS pour un preset "
+        "donné. Consultez les exécutions n8n ci-dessous."
+    )
+    _render_n8n_executions(expanded=True)
+
+    if vps_configured():
+        if st.button("Actualiser", key="scrape_refresh_no_preset"):
+            st.rerun()
+
+
 def render_scrape_tab(preset_id: str, add_log) -> None:
     st.subheader("Scrape — operations panel")
 
     if not preset_id:
+        _render_scrape_without_preset()
         return
 
     config = load_config(preset_id, require_keys=False)
@@ -271,8 +387,9 @@ def render_scrape_tab(preset_id: str, add_log) -> None:
 
     vps_probe = worker_status() if vps_configured() else None
     if not vps_configured():
-        st.caption(
-            "VPS non configuré — le worker tourne en local (VPS_HOST / VPS_USER dans .env pour le VPS)."
+        st.info(
+            "Scraping **VPS uniquement** (n8n + worker systemd). "
+            "Ajoutez `VPS_HOST` / `VPS_USER` pour lire l'historique et le statut à distance."
         )
     elif vps_probe and not vps_probe.get("reachable", True):
         st.warning(
@@ -280,7 +397,13 @@ def render_scrape_tab(preset_id: str, add_log) -> None:
             f"{vps_probe.get('detail', 'vérifiez VPS_HOST, le réseau et les clés SSH')}."
         )
     else:
-        st.caption(f"VPS: {os.getenv('VPS_HOST', '')} — données persistantes sur le worker.")
+        st.caption(
+            f"VPS {os.getenv('VPS_HOST', '')} — données sous "
+            f"`HERCULE_DATA_ROOT` (scrape_state, scrape.log, heartbeat)."
+        )
+
+    _status_and_history_panel(preset_id)
+    _live_panel(preset_id, config, paths, recovery, target, mode)
 
     _render_worker_controls(
         preset_id,
@@ -290,64 +413,36 @@ def render_scrape_tab(preset_id: str, add_log) -> None:
         vps=vps_probe,
     )
 
-    _live_panel(preset_id, config, paths, recovery, target, mode)
     _render_config_summary(config, preset_id)
 
     if vps_configured():
         st.caption(
             "Push Instantly automatique sur le VPS (worker-loop). "
-            "Le bouton Push CSV ci-dessous ne s'applique qu'en mode local."
+            "Pas de push CSV depuis cette interface."
         )
-    else:
-        csv_stats = csv_push_stats(paths.csv)
-        push_btn = st.button(
-            "Push CSV to Instantly",
-            disabled=not (has_instantly and csv_stats["pending"] > 0),
-            key="scrape_push_btn",
-        )
-
-        async def _run_push() -> dict[str, int]:
-            push_config = load_config(preset_id)
-            return await push_csv_to_instantly(
-                paths.csv,
-                push_config["INSTANTLY_API_KEY"],
-                push_config["INSTANTLY_LIST_ID"],
-                log_cb=add_log,
-                provision_config=push_config,
+        with st.expander("Zone sensible — effacer le checkpoint VPS"):
+            st.warning(
+                "Supprime le CSV et scrape_state.json **sur le VPS** (SSH). "
+                "**Ne supprime pas** les leads déjà dans Instantly."
             )
-
-        if push_btn:
-            with st.spinner("Pushing…"):
-                result = asyncio.run(_run_push())
-            st.success(f"Uploaded {result['pushed']} lead(s).")
-            st.rerun()
-
-    if not vps_configured():
-        csv_stats = csv_push_stats(paths.csv)
-        if os.path.exists(paths.csv) and csv_stats["total"]:
-            with st.expander("CSV preview"):
-                st.dataframe(pd.read_csv(paths.csv).tail(20))
-
-    with st.expander("Danger zone — wipe local checkpoint only"):
-        st.warning(
-            "Supprime le CSV et scrape_state.json sur cette machine / le VPS. "
-            "**Ne supprime pas** les leads déjà dans Instantly."
-        )
-        confirm = st.checkbox("Je confirme la suppression locale", key="scrape_wipe_confirm")
-        wipe_btn = st.button("Wipe local data", disabled=not confirm, key="scrape_wipe")
-        if wipe_btn:
-            with st.spinner("Clearing local checkpoint…"):
-                result = asyncio.run(
-                    clear_local_leads(
-                        cancel_remote=bool(config.get("OUTSCRAPER_API_KEY")),
-                        api_key=config.get("OUTSCRAPER_API_KEY", ""),
-                        log_cb=add_log,
-                        preset=preset_id,
+            confirm = st.checkbox(
+                "Je confirme la suppression du checkpoint VPS",
+                key="scrape_wipe_confirm",
+            )
+            wipe_btn = st.button("Effacer checkpoint VPS", disabled=not confirm, key="scrape_wipe")
+            if wipe_btn:
+                with st.spinner("Suppression du checkpoint…"):
+                    result = asyncio.run(
+                        clear_local_leads(
+                            cancel_remote=bool(config.get("OUTSCRAPER_API_KEY")),
+                            api_key=config.get("OUTSCRAPER_API_KEY", ""),
+                            log_cb=add_log,
+                            preset=preset_id,
+                        )
                     )
+                st.success(
+                    f"Checkpoint effacé — {result['leads_removed']} ligne(s) retirées du CSV. "
+                    f"Instantly live : {instantly_live if instantly_live is not None else '?'}"
                 )
-            st.success(
-                f"Local cleared — {result['leads_removed']} row(s) removed from CSV. "
-                f"Instantly live: {instantly_live if instantly_live is not None else '?'}"
-            )
-            st.rerun()
+                st.rerun()
 
