@@ -57,26 +57,20 @@ def list_ready_presets() -> dict[str, PresetMeta]:
 
 
 def scrape_preset_selector() -> str:
-    ready = list_ready_presets()
-    if not ready:
-        st.info(
-            "Aucun preset prêt. Terminez l'onboarding (onglets 1 à 6) pour activer le scraping."
-        )
-        st.caption(
-            "L'historique **n8n** et le statut VPS restent visibles ci-dessous "
-            "(orchestration scrape sur le VPS)."
-        )
+    presets = discover_presets(use_cache=True)
+    if not presets:
+        st.info("Aucun preset trouvé dans `scraper/configs/`.")
         st.session_state.scrape_preset_id = ""
         return ""
 
-    options = sorted(ready.keys())
-    labels = {pid: ready[pid].label for pid in ready}
+    options = sorted(presets.keys())
+    labels = {pid: presets[pid].label for pid in presets}
 
     if "scrape_preset_id" not in st.session_state:
         st.session_state.scrape_preset_id = ""
 
     query_preset = st.query_params.get("preset", "")
-    if query_preset in ready and st.session_state.scrape_preset_id != query_preset:
+    if query_preset in presets and st.session_state.scrape_preset_id != query_preset:
         st.session_state.scrape_preset_id = query_preset
 
     current = st.session_state.scrape_preset_id
