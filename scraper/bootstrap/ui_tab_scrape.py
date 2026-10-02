@@ -220,7 +220,7 @@ def _render_launch_controls() -> None:
         )
         if ok:
             store_scrape_run_context(
-                resolve_scrape_default_preset_id(),
+                resolve_scrape_tracking_preset_id(),
                 keyword=keyword,
                 instantly_list_id=list_id,
                 instantly_list_name=str(selected_list.get("name", "")) if selected_list else "",
