@@ -1,4 +1,4 @@
-"""Scrape dashboard — VPS history table + launch controls."""
+"""Scrape dashboard — launch form, live progress, VPS history."""
 
 from __future__ import annotations
 
@@ -19,6 +19,7 @@ from bootstrap.scrape_run_history import (
     merge_n8n_into_history,
     merge_run_history,
 )
+from bootstrap.ui_helpers import load_scrape_form_defaults, select_instantly_lead_list
 from bootstrap.vps_control import (
     format_vps_connection_warning,
     load_panel_state,
@@ -45,13 +46,24 @@ def _worker_state_label(heartbeat: dict | None, vps_active: bool) -> str:
     return "Inactif"
 
 
+def _progress_ratio(progress: int, target: int) -> float:
+    if target <= 0:
+        return 0.0
+    return min(max(progress / target, 0.0), 1.0)
+
+
 @st.fragment(run_every=15)
-def _status_and_history_panel(preset_id: str) -> None:
+def _live_progress_and_history_panel(preset_id: str) -> None:
+    config = load_config(preset_id, require_keys=False)
+    paths = output_paths(preset_id)
     state, log_text, _, heartbeat, cron_events = load_panel_state(
         preset_id,
         max_log_lines=400,
         max_cron_lines=40,
     )
+    if state is None:
+        state = load_scrape_state(paths.scrape_state)
+
     vps = worker_status() if vps_configured() else None
     running, _code, running_label = detect_scrape_running(
         preset_id,
@@ -60,12 +72,34 @@ def _status_and_history_panel(preset_id: str) -> None:
         vps=vps,
     )
 
-    st.subheader("État & historique")
+    progress, target, at_target = ui_target_progress(config, state)
+    mode = target_mode(config)
+    leads_saved = int(state.get("leads_saved", 0)) if state else 0
+    instantly_pushed = int(state.get("instantly_pushed", 0)) if state else 0
+
+    st.subheader("Suivi en cours")
+    st.caption("Actualisation automatique toutes les 15 secondes.")
+
     if running:
         st.success(f"**Scrape en cours** — {running_label}")
+    elif at_target:
+        st.info(f"**Objectif atteint** — {progress}/{target} ({mode})")
     else:
-        st.info(f"**Aucun scrape en cours** — {running_label}")
+        st.info(f"**Inactif** — {running_label}")
 
+    st.progress(_progress_ratio(progress, target), text=f"{progress:,} / {target:,} leads")
+
+    m1, m2, m3, m4 = st.columns(4)
+    m1.metric("Progression", f"{progress:,}")
+    m2.metric("Objectif", f"{target:,}")
+    m3.metric("Leads enregistrés", f"{leads_saved:,}")
+    m4.metric("Poussés Instantly", f"{instantly_pushed:,}")
+
+    if log_text.strip():
+        with st.expander("Journal scrape (extrait)", expanded=running):
+            st.code(log_text[-12000:], language="shell")
+
+    st.subheader("État & historique")
     history = merge_run_history(
         preset_id,
         state=state,
@@ -119,7 +153,6 @@ def _render_launch_controls(
     *,
     at_target: bool,
     mode: str,
-    has_instantly: bool,
     vps: dict[str, Any] | None = None,
 ) -> None:
     st.subheader("Lancer un scrape")
@@ -141,6 +174,30 @@ def _render_launch_controls(
             "pour lancer ou suivre les scrapes."
         )
 
+    keyword_default, target_default, config_list_id = load_scrape_form_defaults(preset_id)
+
+    keyword = st.text_input(
+        "Mots-clés de niche (recherche)",
+        value=keyword_default,
+        help="Termes Outscraper / Google Maps pour cette campagne.",
+        key=f"scrape_keyword_{preset_id}",
+    )
+
+    selected_list = select_instantly_lead_list(
+        label="Liste Instantly de destination",
+        key=f"scrape_instantly_list_{preset_id}",
+        current_id=config_list_id,
+    )
+
+    target_leads = st.number_input(
+        "Volume cible (leads)",
+        min_value=1,
+        value=target_default,
+        step=100,
+        help="Nombre de leads visés pour cette exécution (défaut : TARGET_LEADS du preset).",
+        key=f"scrape_volume_{preset_id}",
+    )
+
     _, _, _, heartbeat, _ = load_panel_state(preset_id)
     vps = vps or (worker_status() if vps_configured() else None)
     status_label = _worker_state_label(heartbeat, bool(vps and vps.get("active")))
@@ -148,13 +205,21 @@ def _render_launch_controls(
     if vps_configured():
         st.caption(f"État worker VPS : **{status_label}**.")
 
-    disabled_launch = at_target or (is_instantly_push_mode(mode) and not has_instantly)
+    push_mode = is_instantly_push_mode(mode)
+    missing_list = push_mode and not (selected_list and selected_list.get("id"))
+    missing_keyword = not keyword.strip()
+
+    disabled_launch = at_target or missing_list or missing_keyword or not n8n_ready
+    if missing_keyword and n8n_ready:
+        st.caption("Saisissez au moins un mot-clé de recherche.")
+    if missing_list and push_mode:
+        st.caption("Sélectionnez une liste Instantly pour les presets en mode push.")
 
     ctrl1, ctrl2, ctrl3 = st.columns(3)
     n8n_btn = ctrl1.button(
-        "Lancer via n8n",
+        "Lancer le scrape",
         type="primary",
-        disabled=disabled_launch or not n8n_ready,
+        disabled=disabled_launch,
         key="scrape_trigger_n8n",
     )
     pause_btn = ctrl2.button(
@@ -165,7 +230,13 @@ def _render_launch_controls(
     refresh_btn = ctrl3.button("Actualiser", key="scrape_refresh")
 
     if n8n_btn:
-        ok, message = trigger_n8n_scrape(preset_id)
+        list_id = str(selected_list["id"]) if selected_list else ""
+        ok, message = trigger_n8n_scrape(
+            preset_id,
+            keyword=keyword,
+            instantly_list_id=list_id,
+            target_leads=int(target_leads),
+        )
         if ok:
             st.success(message)
         else:
@@ -234,7 +305,6 @@ def render_scrape_tab(preset_id: str) -> None:
         state = load_scrape_state(paths.scrape_state)
     _progress, _target, at_target = ui_target_progress(config, state)
     mode = target_mode(config)
-    has_instantly = bool(config.get("INSTANTLY_API_KEY") and config.get("INSTANTLY_LIST_ID"))
 
     vps_probe = worker_status() if vps_configured() else None
     if not vps_configured() and not n8n_scrape_webhook_configured():
@@ -253,11 +323,10 @@ def render_scrape_tab(preset_id: str) -> None:
             f"`HERCULE_DATA_ROOT` (scrape_state, scrape.log, heartbeat)."
         )
 
-    _status_and_history_panel(preset_id)
     _render_launch_controls(
         preset_id,
         at_target=at_target,
         mode=mode,
-        has_instantly=has_instantly,
         vps=vps_probe,
     )
+    _live_progress_and_history_panel(preset_id)

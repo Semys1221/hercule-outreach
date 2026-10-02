@@ -242,8 +242,14 @@ def stop_worker(*, cfg: VpsConfig | None = None) -> tuple[bool, str]:
     return False, err.strip() or out.strip() or f"systemctl failed ({code})"
 
 
-def trigger_n8n_scrape(preset_id: str) -> tuple[bool, str]:
-    """POST preset_id to N8N_SCRAPE_WEBHOOK_URL (preferred launch path)."""
+def trigger_n8n_scrape(
+    preset_id: str,
+    *,
+    keyword: str = "",
+    instantly_list_id: str = "",
+    target_leads: int | None = None,
+) -> tuple[bool, str]:
+    """POST scrape launch payload to N8N_SCRAPE_WEBHOOK_URL."""
     url = os.getenv("N8N_SCRAPE_WEBHOOK_URL", "").strip()
     if not url:
         return (
@@ -253,7 +259,14 @@ def trigger_n8n_scrape(preset_id: str) -> tuple[bool, str]:
     try:
         import httpx
 
-        payload = {"preset_id": preset_id, "preset": preset_id}
+        payload: dict[str, Any] = {
+            "preset_id": preset_id,
+            "preset": preset_id,
+            "keyword": keyword.strip(),
+            "instantly_list_id": instantly_list_id.strip(),
+        }
+        if target_leads is not None:
+            payload["target_leads"] = int(target_leads)
         with httpx.Client(timeout=30.0) as client:
             response = client.post(url, json=payload)
         if response.status_code >= 400:
