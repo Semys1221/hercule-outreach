@@ -40,6 +40,7 @@ from bootstrap.vps_control import (
     resolve_scrape_tracking_preset_id,
     trigger_n8n_scrape,
     vps_configured,
+    vps_ssh_degraded,
     worker_status,
 )
 from config_loader import load_config
@@ -117,7 +118,12 @@ def _live_progress_and_history_panel(tracking_preset_id: str) -> None:
 
     st.subheader("État & historique")
     vps_rows: list[dict[str, Any]] = []
-    if vps_configured() or state or log_text.strip():
+    skip_vps_history = vps_configured() and vps_ssh_degraded() and not (state or log_text.strip())
+    if skip_vps_history and n8n_configured():
+        st.caption(
+            "Historique VPS indisponible (SSH) — affichage basé sur les exécutions n8n."
+        )
+    if (vps_configured() and not skip_vps_history) or state or log_text.strip():
         vps_rows = merge_run_history(
             None,
             state=state,
@@ -246,17 +252,29 @@ def _render_launch_controls() -> None:
         st.rerun()
 
 
+def _n8n_scrape_ops_available() -> bool:
+    return n8n_scrape_webhook_configured() or n8n_configured()
+
+
 def render_scrape_tab() -> None:
+    n8n_ops = _n8n_scrape_ops_available()
     vps_probe = worker_status() if vps_configured() else None
+    vps_unreachable = bool(vps_probe and not vps_probe.get("reachable", True))
     if not vps_configured() and not n8n_scrape_webhook_configured():
         st.info(
             "Scraping **VPS / n8n**. "
             "Ajoutez `VPS_HOST` / `VPS_USER` pour l'historique ou `N8N_SCRAPE_WEBHOOK_URL` pour lancer."
         )
-    elif vps_probe and not vps_probe.get("reachable", True):
+    elif vps_unreachable and n8n_ops:
+        st.info(
+            "Connexion **VPS SSH** indisponible — suivi live (`scrape_state`, logs) désactivé. "
+            f"{format_vps_connection_warning(vps_probe.get('detail', '') if vps_probe else '')}. "
+            "Le **lancement webhook n8n** et l’**historique n8n** restent disponibles."
+        )
+    elif vps_unreachable:
         st.warning(
             "Connexion VPS impossible — "
-            f"{format_vps_connection_warning(vps_probe.get('detail', ''))}."
+            f"{format_vps_connection_warning(vps_probe.get('detail', '') if vps_probe else '')}."
         )
     elif vps_configured():
         st.caption(

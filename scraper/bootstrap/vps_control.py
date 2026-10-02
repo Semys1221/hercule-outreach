@@ -159,6 +159,17 @@ def _ssh_in_backoff() -> bool:
     return time.monotonic() < _ssh_backoff_until
 
 
+def vps_ssh_degraded() -> bool:
+    """True when VPS is configured but recent SSH attempts failed (backoff active)."""
+    return vps_configured() and _ssh_in_backoff()
+
+
+def vps_ssh_last_error() -> str:
+    if not _ssh_in_backoff():
+        return ""
+    return _ssh_last_error
+
+
 def _mark_ssh_failure(message: str) -> None:
     global _ssh_backoff_until, _ssh_last_error
     _ssh_backoff_until = time.monotonic() + _SSH_BACKOFF_SECONDS

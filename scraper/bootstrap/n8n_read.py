@@ -21,7 +21,8 @@ def _api_key() -> str:
 
 
 def _via_vps_enabled() -> bool:
-    return os.getenv("N8N_VIA_VPS", "1").strip().lower() not in ("0", "false", "no")
+    """SSH tunnel to localhost n8n on VPS — only when no public N8N_BASE_URL."""
+    return os.getenv("N8N_VIA_VPS", "0").strip().lower() not in ("0", "false", "no")
 
 
 def n8n_configured() -> bool:
@@ -256,14 +257,27 @@ def fetch_recent_executions(*, limit: int = 15) -> tuple[list[dict[str, Any]], s
         return [], None
 
     base = os.getenv("N8N_BASE_URL", "").strip().rstrip("/")
+
     if base:
-        return _fetch_http(base, api_key, limit=limit)
+        rows, err = _fetch_http(base, api_key, limit=limit)
+        if rows or err is None:
+            return rows, err
+        if not _via_vps_enabled():
+            return rows, err
 
     if _via_vps_enabled():
         from bootstrap.vps_control import vps_configured
 
         if vps_configured():
-            return _fetch_via_vps_ssh(api_key, limit=limit)
+            rows, err = _fetch_via_vps_ssh(api_key, limit=limit)
+            if rows or err is None:
+                return rows, err
+            if base:
+                return _fetch_http(base, api_key, limit=limit)
+            return rows, err
+
+    if base:
+        return _fetch_http(base, api_key, limit=limit)
 
     return [], None
 
