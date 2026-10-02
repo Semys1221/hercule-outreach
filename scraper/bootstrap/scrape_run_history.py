@@ -200,7 +200,7 @@ def _cron_rows(events: list[dict[str, Any]]) -> list[dict[str, Any]]:
 
 
 def merge_run_history(
-    preset_id: str,
+    preset_id: str | None,
     *,
     state: dict[str, Any] | None,
     log_text: str,
@@ -210,13 +210,16 @@ def merge_run_history(
     """Combine checkpoint, log-derived runs, and cron heal events (newest first)."""
     rows: list[dict[str, Any]] = []
 
-    log_runs = [
-        run for run in parse_worker_runs_from_log(log_text) if run.get("preset") == preset_id
-    ]
+    parsed = parse_worker_runs_from_log(log_text)
+    if preset_id:
+        log_runs = [run for run in parsed if run.get("preset") == preset_id]
+    else:
+        log_runs = parsed
     rows.extend(log_runs)
 
-    if state and str(state.get("preset") or preset_id) == preset_id:
-        state_row = _state_run_row(state, preset_id)
+    state_preset = str((state or {}).get("preset") or preset_id or "").strip()
+    if state and (not preset_id or state_preset == preset_id):
+        state_row = _state_run_row(state, state_preset or preset_id or "—")
         state_start = str(state_row.get("started_at") or "")
         latest_log_start = max(
             (str(r.get("started_at") or "") for r in log_runs),

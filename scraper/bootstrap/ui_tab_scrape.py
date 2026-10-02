@@ -19,31 +19,26 @@ from bootstrap.scrape_run_history import (
     merge_n8n_into_history,
     merge_run_history,
 )
-from bootstrap.ui_helpers import load_scrape_form_defaults, select_instantly_lead_list
+from bootstrap.ui_helpers import (
+    load_adhoc_scrape_form_defaults,
+    merge_scrape_run_display,
+    render_scrape_run_context_banner,
+    select_instantly_lead_list,
+    store_scrape_run_context,
+)
 from bootstrap.vps_control import (
     format_vps_connection_warning,
     load_panel_state,
     n8n_scrape_webhook_configured,
-    stop_worker,
+    resolve_scrape_default_preset_id,
+    resolve_scrape_tracking_preset_id,
     trigger_n8n_scrape,
     vps_configured,
     worker_status,
 )
 from config_loader import load_config
 from paths import output_paths
-from scrape_metrics import heartbeat_age_seconds
-from scrape_state import is_instantly_push_mode, load_scrape_state, target_mode, ui_target_progress
-
-
-def _worker_state_label(heartbeat: dict | None, vps_active: bool) -> str:
-    age = heartbeat_age_seconds(heartbeat)
-    if vps_active:
-        return "Worker VPS actif"
-    if age is not None and age < 900:
-        return "Heartbeat actif"
-    if age is not None:
-        return "En pause (heartbeat expiré)"
-    return "Inactif"
+from scrape_state import load_scrape_state, ui_target_progress
 
 
 def _progress_ratio(progress: int, target: int) -> float:
@@ -53,11 +48,11 @@ def _progress_ratio(progress: int, target: int) -> float:
 
 
 @st.fragment(run_every=15)
-def _live_progress_and_history_panel(preset_id: str) -> None:
-    config = load_config(preset_id, require_keys=False)
-    paths = output_paths(preset_id)
+def _live_progress_and_history_panel(tracking_preset_id: str) -> None:
+    config = load_config(tracking_preset_id, require_keys=False)
+    paths = output_paths(tracking_preset_id)
     state, log_text, _, heartbeat, cron_events = load_panel_state(
-        preset_id,
+        tracking_preset_id,
         max_log_lines=400,
         max_cron_lines=40,
     )
@@ -66,14 +61,18 @@ def _live_progress_and_history_panel(preset_id: str) -> None:
 
     vps = worker_status() if vps_configured() else None
     running, _code, running_label = detect_scrape_running(
-        preset_id,
+        tracking_preset_id,
         state=state,
         heartbeat=heartbeat,
         vps=vps,
     )
 
+    run_display = merge_scrape_run_display(tracking_preset_id, state, config)
     progress, target, at_target = ui_target_progress(config, state)
-    mode = target_mode(config)
+    merged_target = run_display.get("target_leads")
+    if isinstance(merged_target, int) and merged_target > 0:
+        target = merged_target
+        at_target = progress >= target
     leads_saved = int(state.get("leads_saved", 0)) if state else 0
     instantly_pushed = int(state.get("instantly_pushed", 0)) if state else 0
 
@@ -83,9 +82,11 @@ def _live_progress_and_history_panel(preset_id: str) -> None:
     if running:
         st.success(f"**Scrape en cours** — {running_label}")
     elif at_target:
-        st.info(f"**Objectif atteint** — {progress}/{target} ({mode})")
+        st.info(f"**Objectif atteint** — {progress}/{target}")
     else:
         st.info(f"**Inactif** — {running_label}")
+
+    render_scrape_run_context_banner(run_display, running=running)
 
     st.progress(_progress_ratio(progress, target), text=f"{progress:,} / {target:,} leads")
 
@@ -100,27 +101,29 @@ def _live_progress_and_history_panel(preset_id: str) -> None:
             st.code(log_text[-12000:], language="shell")
 
     st.subheader("État & historique")
-    history = merge_run_history(
-        preset_id,
-        state=state,
-        log_text=log_text,
-        cron_events=cron_events,
-    )
+    vps_rows: list[dict[str, Any]] = []
+    if vps_configured() or state or log_text.strip():
+        vps_rows = merge_run_history(
+            None,
+            state=state,
+            log_text=log_text,
+            cron_events=cron_events,
+        )
     n8n_executions: list[dict] = []
     if n8n_configured():
-        n8n_executions, _n8n_err = fetch_recent_executions(limit=20)
+        n8n_executions, _n8n_err = fetch_recent_executions(limit=25)
     history = merge_n8n_into_history(
-        history,
+        vps_rows,
         n8n_executions,
-        preset_id=preset_id,
+        preset_id=None,
     )
     table_rows = history_to_dataframe_rows(history)
     if table_rows:
+        st.caption("Historique agrégé **n8n** + **VPS**.")
         st.dataframe(pd.DataFrame(table_rows), use_container_width=True, hide_index=True)
     else:
         st.caption(
-            "Aucune exécution enregistrée pour ce preset "
-            "(scrape.log / scrape_state.json sur le VPS)."
+            "Aucune exécution enregistrée (scrape.log / scrape_state sur le VPS ou exécutions n8n)."
         )
 
     _render_n8n_executions(expanded=not table_rows)
@@ -148,45 +151,24 @@ def _render_n8n_executions(*, expanded: bool = False) -> None:
             )
 
 
-def _render_launch_controls(
-    preset_id: str,
-    *,
-    at_target: bool,
-    mode: str,
-    vps: dict[str, Any] | None = None,
-) -> None:
+def _render_launch_controls() -> None:
     st.subheader("Lancer un scrape")
 
     n8n_ready = n8n_scrape_webhook_configured()
-    if n8n_ready:
-        st.caption(
-            "Entrée recommandée : **webhook n8n** (`N8N_SCRAPE_WEBHOOK_URL`). "
-            "Le worker VPS peut être arrêté manuellement si besoin."
-        )
-    elif vps_configured():
-        st.caption(
-            "Configurez `N8N_SCRAPE_WEBHOOK_URL` pour déclencher le flux n8n. "
-            "L'historique VPS reste disponible via SSH."
-        )
-    else:
-        st.caption(
-            "Configurez `N8N_SCRAPE_WEBHOOK_URL` et/ou `VPS_HOST` + `VPS_USER` "
-            "pour lancer ou suivre les scrapes."
-        )
 
-    keyword_default, target_default, config_list_id = load_scrape_form_defaults(preset_id)
+    keyword_default, target_default, _config_list_id = load_adhoc_scrape_form_defaults()
 
     keyword = st.text_input(
         "Mots-clés de niche (recherche)",
         value=keyword_default,
         help="Termes Outscraper / Google Maps pour cette campagne.",
-        key=f"scrape_keyword_{preset_id}",
+        key="scrape_keyword_adhoc",
     )
 
     selected_list = select_instantly_lead_list(
         label="Liste Instantly de destination",
-        key=f"scrape_instantly_list_{preset_id}",
-        current_id=config_list_id,
+        key="scrape_instantly_list_adhoc",
+        current_id=None,
     )
 
     target_leads = st.number_input(
@@ -194,118 +176,46 @@ def _render_launch_controls(
         min_value=1,
         value=target_default,
         step=100,
-        help="Nombre de leads visés pour cette exécution (défaut : TARGET_LEADS du preset).",
-        key=f"scrape_volume_{preset_id}",
+        help="Nombre de leads visés pour cette exécution.",
+        key="scrape_volume_adhoc",
     )
 
-    _, _, _, heartbeat, _ = load_panel_state(preset_id)
-    vps = vps or (worker_status() if vps_configured() else None)
-    status_label = _worker_state_label(heartbeat, bool(vps and vps.get("active")))
-
-    if vps_configured():
-        st.caption(f"État worker VPS : **{status_label}**.")
-
-    push_mode = is_instantly_push_mode(mode)
-    missing_list = push_mode and not (selected_list and selected_list.get("id"))
+    missing_list = not (selected_list and selected_list.get("id"))
     missing_keyword = not keyword.strip()
 
-    disabled_launch = at_target or missing_list or missing_keyword or not n8n_ready
+    disabled_launch = missing_list or missing_keyword or not n8n_ready
     if missing_keyword and n8n_ready:
         st.caption("Saisissez au moins un mot-clé de recherche.")
-    if missing_list and push_mode:
-        st.caption("Sélectionnez une liste Instantly pour les presets en mode push.")
+    if missing_list and n8n_ready:
+        st.caption("Sélectionnez une liste Instantly.")
 
-    ctrl1, ctrl2, ctrl3 = st.columns(3)
-    n8n_btn = ctrl1.button(
-        "Lancer le scrape",
+    if st.button(
+        "Lancer",
         type="primary",
         disabled=disabled_launch,
         key="scrape_trigger_n8n",
-    )
-    pause_btn = ctrl2.button(
-        "Arrêter worker VPS",
-        disabled=not vps_configured(),
-        key="scrape_pause_worker",
-    )
-    refresh_btn = ctrl3.button("Actualiser", key="scrape_refresh")
-
-    if n8n_btn:
+    ):
         list_id = str(selected_list["id"]) if selected_list else ""
         ok, message = trigger_n8n_scrape(
-            preset_id,
             keyword=keyword,
             instantly_list_id=list_id,
             target_leads=int(target_leads),
         )
         if ok:
+            store_scrape_run_context(
+                resolve_scrape_default_preset_id(),
+                keyword=keyword,
+                instantly_list_id=list_id,
+                instantly_list_name=str(selected_list.get("name", "")) if selected_list else "",
+                target_leads=int(target_leads),
+            )
             st.success(message)
         else:
             st.error(message)
         st.rerun()
 
-    if pause_btn:
-        ok, message = stop_worker()
-        if ok:
-            st.success(message)
-        else:
-            st.warning(message)
-        st.rerun()
 
-    if refresh_btn:
-        st.rerun()
-
-
-def _render_scrape_without_preset() -> None:
-    vps_probe = worker_status() if vps_configured() else None
-    if not vps_configured():
-        st.info(
-            "Scraping **VPS / n8n**. "
-            "Ajoutez `VPS_HOST` / `VPS_USER` pour l'historique scrape à distance "
-            "ou `N8N_SCRAPE_WEBHOOK_URL` pour lancer."
-        )
-    elif vps_probe and not vps_probe.get("reachable", True):
-        st.warning(
-            "Connexion VPS impossible — "
-            f"{format_vps_connection_warning(vps_probe.get('detail', ''))}."
-        )
-
-    st.subheader("État & historique")
-    table_rows: list[dict[str, str]] = []
-    n8n_err: str | None = None
-    if n8n_configured():
-        executions, n8n_err = fetch_recent_executions(limit=25)
-        if executions:
-            history = merge_n8n_into_history([], executions, preset_id=None)
-            table_rows = history_to_dataframe_rows(history)
-    if table_rows:
-        st.caption("Historique agrégé depuis **n8n** (sélectionnez un preset pour le détail VPS).")
-        st.dataframe(pd.DataFrame(table_rows), use_container_width=True, hide_index=True)
-    else:
-        st.info(
-            "Aucun historique — configurez le VPS et/ou n8n, ou choisissez un preset."
-        )
-        if n8n_err:
-            st.warning(f"n8n — {n8n_err}")
-    _render_n8n_executions(expanded=not table_rows)
-
-    if vps_configured() or n8n_scrape_webhook_configured():
-        if st.button("Actualiser", key="scrape_refresh_no_preset"):
-            st.rerun()
-
-
-def render_scrape_tab(preset_id: str) -> None:
-    if not preset_id:
-        _render_scrape_without_preset()
-        return
-
-    config = load_config(preset_id, require_keys=False)
-    paths = output_paths(preset_id)
-    state, _, _, _, _ = load_panel_state(preset_id, max_log_lines=1, max_cron_lines=1)
-    if state is None:
-        state = load_scrape_state(paths.scrape_state)
-    _progress, _target, at_target = ui_target_progress(config, state)
-    mode = target_mode(config)
-
+def render_scrape_tab() -> None:
     vps_probe = worker_status() if vps_configured() else None
     if not vps_configured() and not n8n_scrape_webhook_configured():
         st.info(
@@ -323,10 +233,6 @@ def render_scrape_tab(preset_id: str) -> None:
             f"`HERCULE_DATA_ROOT` (scrape_state, scrape.log, heartbeat)."
         )
 
-    _render_launch_controls(
-        preset_id,
-        at_target=at_target,
-        mode=mode,
-        vps=vps_probe,
-    )
-    _live_progress_and_history_panel(preset_id)
+    _render_launch_controls()
+    tracking_preset = resolve_scrape_tracking_preset_id()
+    _live_progress_and_history_panel(tracking_preset)

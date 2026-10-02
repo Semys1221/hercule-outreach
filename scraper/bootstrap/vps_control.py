@@ -54,6 +54,25 @@ def n8n_scrape_webhook_configured() -> bool:
     return bool(os.getenv("N8N_SCRAPE_WEBHOOK_URL", "").strip())
 
 
+def resolve_scrape_default_preset_id() -> str:
+    """Preset used when the UI/webhook omits preset_id (n8n heal --preset)."""
+    for key in ("SCRAPE_DEFAULT_PRESET", "N8N_DEFAULT_PRESET"):
+        value = os.getenv(key, "").strip()
+        if value:
+            return value
+    return "_adhoc"
+
+
+def resolve_scrape_tracking_preset_id() -> str:
+    """Preset directory to read for Suivi en cours (heartbeat overrides default)."""
+    default = resolve_scrape_default_preset_id()
+    if not vps_configured():
+        return default
+    _, _, _, heartbeat, _ = load_panel_state(default, max_log_lines=1, max_cron_lines=1)
+    hb_preset = str((heartbeat or {}).get("preset") or "").strip()
+    return hb_preset or default
+
+
 def vps_ssh_key_configured(cfg: VpsConfig | None = None) -> bool:
     cfg = cfg or VpsConfig.from_env()
     if not cfg or not cfg.key_path:
@@ -243,11 +262,11 @@ def stop_worker(*, cfg: VpsConfig | None = None) -> tuple[bool, str]:
 
 
 def trigger_n8n_scrape(
-    preset_id: str,
     *,
-    keyword: str = "",
-    instantly_list_id: str = "",
-    target_leads: int | None = None,
+    keyword: str,
+    instantly_list_id: str,
+    target_leads: int,
+    preset_id: str | None = None,
 ) -> tuple[bool, str]:
     """POST scrape launch payload to N8N_SCRAPE_WEBHOOK_URL."""
     url = os.getenv("N8N_SCRAPE_WEBHOOK_URL", "").strip()
@@ -260,13 +279,13 @@ def trigger_n8n_scrape(
         import httpx
 
         payload: dict[str, Any] = {
-            "preset_id": preset_id,
-            "preset": preset_id,
             "keyword": keyword.strip(),
             "instantly_list_id": instantly_list_id.strip(),
+            "target_leads": int(target_leads),
         }
-        if target_leads is not None:
-            payload["target_leads"] = int(target_leads)
+        if preset_id and preset_id.strip():
+            payload["preset_id"] = preset_id.strip()
+            payload["preset"] = preset_id.strip()
         with httpx.Client(timeout=30.0) as client:
             response = client.post(url, json=payload)
         if response.status_code >= 400:

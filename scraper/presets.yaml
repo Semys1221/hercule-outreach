@@ -26915,3 +26915,44 @@ presets:
         angle: Lead gen pour vétérinaires libéraux (JUM Advisory)
         valeur_client: Prise de RDV étude fiscale DGFiP / AMF — cotisations, taxe 30–41 %
         effectif_cible: cabinets / cliniques indépendants
+  _adhoc:
+    label: Scrape ad hoc (sans preset UI)
+    niche_group: adhoc
+    niche_group_label: Ad hoc
+    subniche_label: Campagne ponctuelle
+    config:
+      OUTSCRAPER_API_KEY: ''
+      INSTANTLY_API_KEY: ''
+      INSTANTLY_LIST_ID: ''
+      INSTANTLY_CAMPAIGN_ID: ''
+      INSTANTLY_SUBSEQUENCE_ID: ''
+      INSTANTLY_DEDUP_LIST_IDS: []
+      INSTANTLY_DEDUP_CAMPAIGN_IDS: []
+      INSTANTLY_SKIP_IF_IN_CAMPAIGN: false
+      INSTANTLY_SKIP_IF_IN_LIST: true
+      INSTANTLY_PUSH_EVERY: 50
+      INSTANTLY_BACKLOG_PUSH_MIN: 50
+      ENRICH_ENABLED: false
+      WEBSITE_REQUIRED: false
+      OUTSCRAPER_BATCH_SIZE: 200
+      OUTSCRAPER_CONCURRENCY: 10
+      OUTSCRAPER_LIMIT_PER_QUERY: 50
+      OUTSCRAPER_POLL_INITIAL_S: 20
+      OUTSCRAPER_POLL_INTERVAL_S: 5
+      OUTSCRAPER_POLL_SLOW_S: 10
+      OUTSCRAPER_POLL_TIMEOUT_S: 600
+      OUTSCRAPER_TOTAL_LIMIT_BUFFER: 8
+      OUTSCRAPER_FILTERS:
+      - operational_only
+      TARGET_LEADS: 5000
+      TARGET_MODE: instantly_pushed
+      SCRAPE_SKIP_PHASE_ENABLED: true
+      KEYWORDS: []
+      GEO_QUERIES: []
+      EXCLUDE_DOMAINS:
+      - google.com
+      - google.fr
+      - facebook.com
+      - instagram.com
+      - linkedin.com
+      PAPPERS_ENABLED: false
