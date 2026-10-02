@@ -10,22 +10,16 @@ import time
 from dataclasses import dataclass
 from typing import Any
 
-from dotenv import load_dotenv
+import config_loader  # noqa: F401 — loads repo .env via outreach_root()
 
 _SSH_CONNECT_TIMEOUT = 10
 _SSH_BACKOFF_SECONDS = 45
 _ssh_backoff_until: float = 0.0
 _ssh_last_error: str = ""
 
-_REPO_ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", ".."))
-_REPO_ENV = os.path.join(_REPO_ROOT, ".env")
-_LOCAL_ENV = os.path.join(os.path.dirname(__file__), "..", ".env")
+from repo_paths import outreach_root
 
-if os.path.isfile(_REPO_ENV):
-    load_dotenv(_REPO_ENV)
-if os.path.isfile(_LOCAL_ENV):
-    load_dotenv(_LOCAL_ENV, override=True)
-load_dotenv()
+_REPO_ROOT = str(outreach_root())
 
 
 @dataclass
@@ -33,6 +27,7 @@ class VpsConfig:
     host: str
     user: str
     password: str
+    key_path: str
     repo_root: str
     data_root: str
     service_name: str
@@ -47,6 +42,7 @@ class VpsConfig:
             host=host,
             user=user,
             password=os.getenv("VPS_SSH_PASSWORD", "").strip(),
+            key_path=os.path.expanduser(os.getenv("VPS_SSH_KEY", "").strip()),
             repo_root=os.getenv("VPS_REPO_ROOT", "/root/hercule-outreach").strip(),
             data_root=os.getenv("HERCULE_DATA_ROOT", "/var/lib/hercule").strip(),
             service_name=os.getenv("VPS_SCRAPER_SERVICE", "hercule-scraper").strip(),
@@ -55,6 +51,46 @@ class VpsConfig:
 
 def vps_configured() -> bool:
     return VpsConfig.from_env() is not None
+
+
+def vps_ssh_key_configured(cfg: VpsConfig | None = None) -> bool:
+    cfg = cfg or VpsConfig.from_env()
+    if not cfg or not cfg.key_path:
+        return False
+    return os.path.isfile(cfg.key_path)
+
+
+def vps_ssh_auth_hint(cfg: VpsConfig | None = None) -> str:
+    """Actionable hint when SSH auth is misconfigured."""
+    cfg = cfg or VpsConfig.from_env()
+    if not cfg:
+        return "Définissez `VPS_HOST` et `VPS_USER` dans le `.env` du repo."
+    env_path = str(outreach_root() / ".env")
+    if not os.path.isfile(env_path):
+        env_path = "repo/.env"
+    if cfg.password:
+        return ""
+    if cfg.key_path and not os.path.isfile(cfg.key_path):
+        return f"`VPS_SSH_KEY` introuvable ({cfg.key_path})."
+    if cfg.key_path:
+        return ""
+    return (
+        f"`VPS_SSH_PASSWORD` absent ou non chargé — vérifiez {env_path} "
+        "(guillemets fermés si le mot de passe contient `'` ou `@`), "
+        "ou définissez `VPS_SSH_KEY` vers une clé privée."
+    )
+
+
+def format_vps_connection_warning(detail: str, cfg: VpsConfig | None = None) -> str:
+    base = detail or "vérifiez VPS_HOST, le réseau et l'authentification SSH"
+    hint = vps_ssh_auth_hint(cfg)
+    if hint and hint not in base and (
+        "Authentication failed" in base
+        or "VPS_SSH_PASSWORD" in base
+        or "VPS_SSH_KEY" in base
+    ):
+        return f"{base}. {hint}"
+    return base
 
 
 def _ssh_in_backoff() -> bool:
@@ -76,17 +112,24 @@ def _clear_ssh_failure() -> None:
 def _connect_ssh(cfg: VpsConfig):
     import paramiko
 
+    preflight = vps_ssh_auth_hint(cfg)
+    if preflight and not vps_ssh_key_configured(cfg):
+        raise paramiko.AuthenticationException(preflight)
+
     client = paramiko.SSHClient()
     client.set_missing_host_key_policy(paramiko.AutoAddPolicy())
+    use_key = vps_ssh_key_configured(cfg)
     connect_kwargs: dict[str, Any] = {
         "hostname": cfg.host,
         "username": cfg.user,
         "timeout": _SSH_CONNECT_TIMEOUT,
-        "allow_agent": True,
-        "look_for_keys": True,
+        "allow_agent": not cfg.password,
+        "look_for_keys": not cfg.password and not use_key,
     }
     if cfg.password:
         connect_kwargs["password"] = cfg.password
+    if use_key:
+        connect_kwargs["key_filename"] = cfg.key_path
     client.connect(**connect_kwargs)
     return client
 

@@ -50,7 +50,8 @@ Optional VPS remote control (Scrape page):
 |----------|---------|
 | `VPS_HOST` | SSH host for scrape worker |
 | `VPS_USER` | SSH user (e.g. `root`) |
-| `VPS_SSH_PASSWORD` | Password (optional if SSH keys work) |
+| `VPS_SSH_PASSWORD` | Password — use quotes if it contains `'` or `@` (must close the quote in `.env`) |
+| `VPS_SSH_KEY` | Optional path to private key instead of password |
 | `VPS_REPO_ROOT` | Repo path on VPS (default `/root/hercule.dev`) |
 | `HERCULE_DATA_ROOT` | Persistent data dir (default `/var/lib/hercule`) |
 | `VPS_SCRAPER_SERVICE` | systemd unit name (default `hercule-scraper`) |

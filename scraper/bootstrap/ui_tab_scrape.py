@@ -22,6 +22,7 @@ from bootstrap.scrape_run_history import (
     merge_run_history,
 )
 from bootstrap.vps_control import (
+    format_vps_connection_warning,
     load_panel_state,
     remote_csv_lead_count,
     start_worker,
@@ -356,7 +357,7 @@ def _render_scrape_without_preset() -> None:
     elif vps_probe and not vps_probe.get("reachable", True):
         st.warning(
             "Connexion VPS impossible — "
-            f"{vps_probe.get('detail', 'vérifiez VPS_HOST, le réseau et les clés SSH')}."
+            f"{format_vps_connection_warning(vps_probe.get('detail', ''))}."
         )
 
     st.subheader("État & historique")
@@ -418,7 +419,7 @@ def render_scrape_tab(preset_id: str, add_log) -> None:
     elif vps_probe and not vps_probe.get("reachable", True):
         st.warning(
             "Connexion VPS impossible — "
-            f"{vps_probe.get('detail', 'vérifiez VPS_HOST, le réseau et les clés SSH')}."
+            f"{format_vps_connection_warning(vps_probe.get('detail', ''))}."
         )
     else:
         st.caption(

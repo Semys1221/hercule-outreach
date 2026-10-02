@@ -9,8 +9,10 @@ from typing import Any
 
 from dotenv import load_dotenv
 
+from repo_paths import outreach_root
+
 _LIB_DIR = os.path.dirname(os.path.abspath(__file__))
-_REPO_ENV = os.path.join(_LIB_DIR, "..", ".env")
+_REPO_ENV = str(outreach_root() / ".env")
 _LOCAL_ENV = os.path.join(_LIB_DIR, ".env")
 
 if os.path.isfile(_REPO_ENV):
