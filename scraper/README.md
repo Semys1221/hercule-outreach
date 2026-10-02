@@ -27,15 +27,6 @@ make venv
 make dev-scraper
 ```
 
-**Terminal shortcut** (same as `make dev-scraper` / `make scrapper`; loads repo `.env` via `config_loader` / `vps_control` when the app imports):
-
-```bash
-export PATH="/path/to/hercule-outreach/bin:$PATH"   # once per shell, or add to ~/.zshrc
-scrapper
-```
-
-`scraper` in `bin/` is the same launcher; use whichever spelling you prefer.
-
 Or manually:
 
 ```bash
