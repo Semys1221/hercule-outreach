@@ -14,9 +14,11 @@ for path in (_REPO_ROOT, _APP_DIR):
 from shared.mev_export import extract_emails_from_dataframe, mev_csv_bytes
 
 from checkpoint import list_checkpoints, partial_verified_path
+from clean_column import CLEANED_KEY, CLEANED_VALUE_VALID, count_cleaned_tag_on_leads
 from paths import data_dir
 from core_logic import get_api_key
 from instantly_client import (
+    InstantlyClient,
     count_leads_in_campaign,
     count_leads_in_list,
     fetch_leads_from_list,
@@ -78,6 +80,21 @@ def _status_count(result, status: str) -> int:
 
 def _render_validation_screen(result, *, show_push: bool) -> None:
     st.success("Cleaning complete — review your results below.")
+
+    if show_push:
+        if result.mark_attempted and result.mark_patched:
+            st.success(
+                f"Tag Instantly **{CLEANED_KEY}={CLEANED_VALUE_VALID}** appliqué à "
+                f"**{result.mark_patched}** lead(s) valide(s) "
+                f"({result.mark_failed} échec(s), "
+                f"{result.mark_skipped_no_lead} sans id Instantly)."
+            )
+        elif result.final_clean_count and not result.mark_attempted:
+            st.info(
+                f"Les **{result.final_clean_count}** lead(s) valides incluent "
+                f"**{CLEANED_KEY}={CLEANED_VALUE_VALID}** dans le CSV ; "
+                "le marquage Instantly n’a pas été exécuté pour ce run."
+            )
 
     st.write("#### MyEmailVerifier results")
     v1, v2, v3, v4 = st.columns(4)
@@ -335,6 +352,60 @@ def _cached_lead_lists() -> list[dict]:
     )
 
 
+@st.cache_data(ttl=300, show_spinner="Analyse du tag cleaned sur la liste…")
+def _cached_cleaned_tag_stats(list_id: str) -> dict[str, int]:
+    leads = fetch_leads_from_list(list_id.strip())
+    return count_cleaned_tag_on_leads(
+        leads,
+        merged_vars_for_lead=InstantlyClient.lead_custom_variables,
+    )
+
+
+def _render_cleaned_tag_preview(list_id: str, *, cache_key_suffix: str = "default") -> None:
+    """Show how many source leads already have cleaned=valid on Instantly."""
+    if not get_instantly_api_key():
+        return
+
+    refresh_col, _ = st.columns([1, 3])
+    with refresh_col:
+        if st.button(
+            "Actualiser tag cleaned",
+            key=f"refresh_cleaned_tag_{cache_key_suffix}",
+        ):
+            _cached_cleaned_tag_stats.clear()
+            st.rerun()
+
+    try:
+        stats = _cached_cleaned_tag_stats(list_id)
+    except Exception as exc:
+        st.error(f"Impossible de lire les tags cleaned sur Instantly : {exc}")
+        return
+
+    missing = stats.get("missing", 0)
+    marked = stats.get("valid", 0)
+    other = stats.get("other", 0)
+    total = stats.get("total", 0)
+
+    if total == 0:
+        st.info("Cette liste ne contient aucun lead.")
+        return
+
+    st.info(
+        f"**{missing}** lead(s) sans tag **cleaned** — "
+        f"**{marked}** déjà marqué(s) (**{CLEANED_KEY}**={CLEANED_VALUE_VALID!r}) "
+        f"sur **{total}** au total."
+    )
+    st.caption(
+        "Après le nettoyage, les leads valides recevront "
+        f"**{CLEANED_KEY}={CLEANED_VALUE_VALID}** sur Instantly (PATCH après push campagne)."
+    )
+    if other:
+        st.warning(
+            f"{other} lead(s) ont une autre valeur pour **{CLEANED_KEY}** "
+            f"(pas {CLEANED_VALUE_VALID!r}) — ils seront traités comme non marqués."
+        )
+
+
 @st.cache_data(ttl=300, show_spinner=False)
 def _cached_campaigns() -> list[dict]:
     items = list_all_campaigns()
@@ -461,6 +532,10 @@ with tab_instantly:
 
         if selected_list:
             st.caption(f"List ID: `{selected_list['id']}`")
+            _render_cleaned_tag_preview(
+                selected_list["id"],
+                cache_key_suffix="step1",
+            )
             st.caption(
                 "For manual MyEmailVerifier upload, use **Download for MEV** below — "
                 "do not export from the Instantly UI (wrong column layout)."
@@ -517,6 +592,9 @@ with tab_instantly:
                 f"Source: **{st.session_state.get('list_name')}** "
                 f"({st.session_state.get('list_count', 0)} leads)"
             )
+            list_id = st.session_state.get("list_id")
+            if list_id:
+                _render_cleaned_tag_preview(list_id, cache_key_suffix="step2")
 
         refresh_col, _ = st.columns([1, 3])
         with refresh_col:
@@ -574,6 +652,9 @@ with tab_instantly:
             f"Destination campaign: **{st.session_state.get('campaign_name')}** "
             f"({st.session_state.get('campaign_count', 0)} leads)"
         )
+        list_id = st.session_state.get("list_id")
+        if list_id:
+            _render_cleaned_tag_preview(list_id, cache_key_suffix="step3")
 
         allowed_statuses = st.multiselect(
             "Include these MyEmailVerifier statuses",
@@ -652,6 +733,10 @@ with tab_instantly:
             + f"\n- **Allowed statuses:** {', '.join(allowed_statuses)}"
         )
 
+        list_id = st.session_state.get("list_id")
+        if list_id:
+            _render_cleaned_tag_preview(list_id, cache_key_suffix="step4")
+
         if run_mode == RUN_MODE_FULL:
             st.warning(
                 "Full Clean: the source list will be emptied on Instantly after "
@@ -705,6 +790,7 @@ with tab_instantly:
                         purge_source=(run_mode == RUN_MODE_FULL),
                         on_progress=on_progress,
                     )
+                    _cached_cleaned_tag_stats.clear()
                     st.session_state.pipeline_result = result
                     st.session_state.funnel_step = 5
                     st.rerun()
