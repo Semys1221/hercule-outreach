@@ -7473,6 +7473,12 @@ presets:
       - mariage
       - wedding
       - conseil municipal
+      - conseiller financier
+      - financial consultant
+      - financial advisor
+      - investment
+      - investissement
+      - gestion de patrimoine
       ENRICH_INCLUDED_KEYWORDS: []
       ENRICH_HARD_EXCLUDED_KEYWORDS: []
       ENRICH_SOFT_EXCLUDED_KEYWORDS: []
@@ -15864,24 +15870,24 @@ presets:
       TAXONOMY_GATE_ENABLED: true
       TAXONOMY_MATCH_MODE: taxonomy_only
       TAXONOMY_INCLUDED_KEYWORDS:
-      - courtier
       - mortgage broker
+      - courtier en prêts
+      - prêts hypothécaires
+      - courtier en crédit
+      - credit counseling
+      - conseil en crédit
       - loan agency
       - agence de prêts
-      - courtier en prêts
-      - courtier immobilier
+      - finance broker
       - crédit immobilier
       - rachat de crédit
-      - financement
       TAXONOMY_EXCLUDED_KEYWORDS:
+      - real estate agency
+      - agence immobilière
+      - notary
+      - notaire
       - banque
       - bank
-      - assurance
-      - insurance
-      - agence immobilière
-      - real estate agency
-      - notaire
-      - notary
       - atm
       - distributeur
       ENRICH_INCLUDED_KEYWORDS: []
