@@ -1,6 +1,8 @@
-# Scraper UI (Streamlit)
+# Scraper (Streamlit UI + headless workers)
 
-Lightweight dashboard to **read scrape history** (VPS SSH + optional n8n API) and **trigger scrapes** via n8n webhook. Pipeline execution lives on the VPS / n8n — not in this repo.
+**Headless workers** run from the repo root via `python main.py` (`worker-loop`, `heal`, `scrape`, `push-instantly`, …). Data is written under `$HERCULE_DATA_ROOT/streamlit_scraper/output/<preset>/` (default on VPS: `/var/lib/hercule`).
+
+The Streamlit app is a dashboard to **read scrape history** (VPS SSH + optional n8n API) and **trigger scrapes** via n8n webhook.
 
 ## Run locally
 
@@ -31,4 +33,31 @@ See repo `.env.example` for a full template.
 
 ## Data paths
 
-Per preset: `$HERCULE_DATA_ROOT/streamlit_scraper/output/{preset_id}/` — `scrape_state.json`, `scrape.log`, `worker_heartbeat.json`, `cron_events.jsonl`, CSV exports (written by the remote worker).
+Per preset: `$HERCULE_DATA_ROOT/streamlit_scraper/output/{preset_id}/` — `scrape_state.json`, `scrape.log`, `worker_heartbeat.json`, `cron_events.jsonl`, CSV exports (written by `main.py worker-loop`).
+
+## Running the workers on the VPS
+
+Install deps at repo root (`pip install -r requirements.txt`), copy `.env` from `.env.example`, set `HERCULE_DATA_ROOT=/var/lib/hercule`, `OUTSCRAPER_API_KEY`, `INSTANTLY_API_KEY`, and per-preset `INSTANTLY_LIST_ID_<PRESET>` (or values in `presets.yaml`).
+
+Example systemd units (adjust `WorkingDirectory` and `EnvironmentFile` to your checkout):
+
+**Avocats worker** — exits cleanly when target is reached; use `Restart=on-failure` so a successful stop does not loop forever:
+
+```ini
+[Service]
+WorkingDirectory=/root/scrapper-cleaner
+EnvironmentFile=/root/scrapper-cleaner/.env
+ExecStart=/usr/bin/python3 main.py worker-loop --preset avocats --push-instantly
+Restart=on-failure
+RestartSec=30
+```
+
+**Avocats heal cron** (every minute via timer or cron):
+
+```ini
+ExecStart=/usr/bin/python3 main.py heal --preset avocats --stale-minutes 3
+```
+
+**Agences immobilières** — same pattern with `--preset agences_immobilieres` and a dedicated `VPS_SCRAPER_SERVICE` / unit name if you run multiple presets.
+
+`heal` reads `VPS_SCRAPER_SERVICE` (default `hercule-scraper`) and restarts that unit when the worker heartbeat is stale and progress is below `TARGET_LEADS`.
