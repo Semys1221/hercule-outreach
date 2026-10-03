@@ -77,7 +77,7 @@ def _vps_local_n8n_base(cfg: Any) -> str:
     for env_file in (
         os.path.join(cfg.repo_root, ".env"),
         "/root/hercule.dev/.env",
-        "/root/hercule-outreach/.env",
+        "/root/scrapper-cleaner/.env",
     ):
         cmd = f"grep -E '^N8N_(EDITOR_BASE_URL|HOST|PORT)=' {shlex.quote(env_file)} 2>/dev/null || true"
         _, out, _ = _ssh_exec(cfg, cmd, timeout=20)

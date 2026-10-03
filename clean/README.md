@@ -22,7 +22,7 @@ streamlit run app.py
 ### Headless CLI
 
 ```bash
-export PYTHONPATH=/path/to/hercule-outreach:/path/to/hercule-outreach/clean
+export PYTHONPATH=/path/to/scrapper-cleaner:/path/to/scrapper-cleaner/clean
 cd clean
 python cli.py credits
 python cli.py export-mev --list-id <uuid> -o mev_emails.csv

@@ -41,7 +41,7 @@ class VpsConfig:
             user=user,
             password=os.getenv("VPS_SSH_PASSWORD", "").strip(),
             key_path=os.path.expanduser(os.getenv("VPS_SSH_KEY", "").strip()),
-            repo_root=os.getenv("VPS_REPO_ROOT", "/root/hercule-outreach").strip(),
+            repo_root=os.getenv("VPS_REPO_ROOT", "/root/scrapper-cleaner").strip(),
             data_root=os.getenv("HERCULE_DATA_ROOT", "/var/lib/hercule").strip(),
             service_name=os.getenv("VPS_SCRAPER_SERVICE", "hercule-scraper").strip(),
         )
