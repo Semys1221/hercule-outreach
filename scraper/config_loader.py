@@ -173,6 +173,12 @@ def load_config(preset: str = DEFAULT_PRESET, *, require_keys: bool = True) -> d
 
     config = deepcopy(loader())
     config["PRESET_ID"] = preset
+    for key, default in (
+        ("OUTSCRAPER_BATCH_SIZE", 25),
+        ("OUTSCRAPER_CONCURRENCY", 2),
+        ("OUTSCRAPER_LIMIT_PER_QUERY", 50),
+    ):
+        config.setdefault(key, default)
     return _inject_secrets(config, require_keys=require_keys, preset=preset)
 
 
